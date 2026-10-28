@@ -1,7 +1,7 @@
 name = "Sei companion HUD"
 description = "Shows your Sei companion's status and quick commands on the host's screen."
 author = "Sei"
-version = "0.1.0"
+version = "0.1.1"
 api_version = 10
 dst_compatible = true
 dont_starve_compatible = false

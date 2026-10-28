@@ -25,6 +25,8 @@ local modules = {
     ['screens/chatinputscreen'] = function() return { chat = true } end,
 }
 GLOBAL = {
+    ipairs = ipairs, pcall = pcall, type = type, tostring = tostring,
+    tonumber = tonumber, math = math, string = string,
     require = function(name) return assert(modules[name], name) end,
     TALKINGFONT = 'font',
     json = { decode = function() return response end },
@@ -32,8 +34,12 @@ GLOBAL = {
     TheFrontEnd = { PushScreen = function(_, s) assert(s.chat); opened = opened + 1 end },
     TheSim = { QueryServer = function(_, _, cb) cb('json', true, 200) end },
 }
-AddClassPostConstruct = function(name, fn) assert(name == 'widgets/controls'); hook = fn end
-dofile('native/dst-mod/sei_hud/modmain.lua')
+local modEnv = {
+    GLOBAL = GLOBAL,
+    AddClassPostConstruct = function(name, fn) assert(name == 'widgets/controls'); hook = fn end,
+}
+local chunk = assert(loadfile('native/dst-mod/sei_hud/modmain.lua', 't', modEnv))
+chunk()
 local controls = { topleft_root = widget() }
 hook(controls)
 local root = controls.seiHud

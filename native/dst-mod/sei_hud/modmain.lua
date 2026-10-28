@@ -1,6 +1,8 @@
 -- Client-only: the host's app exposes a read-only local status endpoint.
 local G = GLOBAL
 local require = G.require
+local ipairs, pcall, type = G.ipairs, G.pcall, G.type
+local tostring, tonumber, math, string = G.tostring, G.tonumber, G.math, G.string
 local Text = require("widgets/text")
 local ImageButton = require("widgets/imagebutton")
 local ChatInputScreen = require("screens/chatinputscreen")
