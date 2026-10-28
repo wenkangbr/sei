@@ -8,6 +8,10 @@ import { createObservationState, createHandleRegistry } from './protocol.js'
 import { EventEmitter } from 'node:events'
 
 describe('DST prompts', () => {
+  it('asks the companion to acknowledge player requests and report their outcome', () => {
+    expect(DST_BASELINE).toContain('acknowledge the request')
+    expect(DST_BASELINE).toContain('report completion or explain why it failed')
+  })
   it('keeps the say() contract and describes every registered verb', () => {
     expect(DST_BASELINE).toMatch(/Others cannot see your text output by default/)
     expect(DST_BASELINE).toMatch(/say\(\)/)

@@ -2,8 +2,6 @@ name: Windows release
 
 on:
   push:
-    branches:
-      - 'dst-hud-test'
     tags:
       - 'v*'
 
@@ -45,8 +43,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run dist:win -- --publish never
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (!(Test-Path 'release/latest.yml')) { throw 'Missing Windows update metadata' }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $feed = if ($version.Contains('-')) { 'beta.yml' } else { 'latest.yml' }
+          if (!(Test-Path "release/$feed")) { throw "Missing Windows update metadata: $feed" }
           if (!(Get-ChildItem 'release/*.exe')) { throw 'Missing Windows installer' }
+          Remove-Item 'release/builder-debug.yml' -ErrorAction SilentlyContinue
       - name: Build game packs
         shell: pwsh
         env:
@@ -67,19 +68,8 @@ jobs:
           files: |
             release/*.exe
             release/*.exe.blockmap
-            release/latest.yml
+            release/*.yml
             release/packs/sei-pack-*.zip
             release/packs/game-packs-*.json
           fail_on_unmatched_files: true
-      - name: Upload test build
-        if: github.ref == 'refs/heads/dst-hud-test'
-        uses: actions/upload-artifact@v7
-        with:
-          name: sei-windows-dst-hud-test
-          path: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
-            release/packs/sei-pack-*.zip
-            release/packs/game-packs-*.json
-          if-no-files-found: error
+          prerelease: ${{ contains(github.ref_name, '-') }}
