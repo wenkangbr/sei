@@ -1,0 +1,783 @@
+/**
+ * VoicePicker (260705, reworked 260720, tabs + playground 260725) — choose the
+ * companion's speaking voice during creation and in Edit companion.
+ *
+ * Three selection states (see lib/voicePicker.ts):
+ *   - Auto (default): metadata.voiceId stays unset; the runtime assigns a
+ *     deterministic, roster-deduped pick from the curated pool on first use.
+ *   - No voice: metadata.voiceId = 'none'; the companion is silent on calls.
+ *   - A pinned pool voice, chosen from gender tabs (Feminine / Masculine /
+ *     Neutral). Only the active tab's voices render; the Auto / No-voice cards
+ *     and the legacy "Current voice" row sit above the tabs so they stay
+ *     visible from any tab.
+ *
+ * Samples (260720, bundled-first): every curated-pool voice ships a
+ * pre-generated sample mp3 per conversation language in the renderer's public
+ * assets (voice-previews/), so pool rows play instantly, offline, with no
+ * sign-in. The live TTS path (main-side disk cache + session Map here) is the
+ * fallback for voice ids without a bundled file (the legacy "Current voice"
+ * row), for a bundled asset that fails to load, and for a non-default CALMNESS
+ * (the bundled clips are recorded at engine defaults). One sample plays at a
+ * time; starting a second stops the first. When TTS is unavailable (signed out,
+ * no dev key) bundled samples keep playing.
+ *
+ * Playground (260725): a "Tune the voice" panel with Pitch and Calmness
+ * (ElevenLabs stability) sliders.
+ *
+ * 260731: pitch is applied locally at playback (lib/voice/pitchBus.ts) and no
+ * longer reaches synthesis, so it no longer forces a live TTS fetch — a
+ * pitch-only tune previews from the BUNDLED clip through the shifter: instant,
+ * offline, no sign-in, no spend. Only calmness still changes the bytes.
+ *
+ * 261019: "Your ElevenLabs voices". When main has an ElevenLabs key
+ * (resolveOwnVoiceKey: a stored key on either AI backend since 261020, or
+ * the SEI_TTS_DEV_KEY env in dev shells), it lists the voices in the
+ * user's own account (cloned, designed, saved from the Voice Library) and
+ * they get their own tab. A pick reports its OwnVoicePick through onChange so
+ * the save site stamps the metadata.voiceOwn marker. Samples are ElevenLabs'
+ * own preview clips, fetched in main. A key refusal or a network failure is
+ * one quiet line; the built-in list is never affected. While the key route is
+ * active on the LOCAL backend the pool tabs say that Sei's voices need a paid
+ * ElevenLabs plan through the key (ElevenLabs does not serve library voices
+ * over the API to free plans). On Sei Cloud the pool stays on the proxy.
+ *
+ * 261020 (T158): with no key saved, on either backend, one line points to
+ * the key field in Settings. Text only: the picker sits inside creation and
+ * Edit companion, and jumping to Settings would drop unsaved edits.
+ */
+
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { sei } from '../lib/ipcClient';
+import type { OwnVoiceList, VoiceInfo } from '@shared/ipc';
+import {
+  groupVoices,
+  reduceSelection,
+  isUnlistedVoice,
+  assetPathFor,
+  normalizeVoiceParams,
+  ownVoicePickFor,
+  ownVoiceCategoryLabel,
+  ownVoiceDetail,
+  ownVoicesView,
+  poolUsesOwnKey,
+  elevenKeyHintShown,
+  defaultVoiceTab,
+  OWN_TAB_KEY,
+  PITCH_DEFAULT,
+  CALMNESS_DEFAULT,
+  NO_VOICE_ID,
+  type OwnVoicePick,
+  type VoiceParams,
+  type VoiceTabKey,
+} from '../lib/voicePicker';
+import { attach as attachPitch, warm as warmPitchBus, whenReady as pitchReady } from '../lib/voice/pitchBus';
+import { useCreditsStore } from '../lib/stores/useCreditsStore';
+import { useT } from '../lib/i18n';
+import { PlayIcon, StopIcon } from './icons';
+import styles from './VoicePicker.module.css';
+
+export interface VoicePickerProps {
+  /** Selected pool voice id, NO_VOICE_ID ('none') for silent, or null for Auto. */
+  value: string | null;
+  /**
+   * `own` is the marker to persist for a pick from "Your ElevenLabs voices"
+   * (261019); null for every other selection. Save sites hand both to
+   * applyVoicePick (shared/voiceIds.ts).
+   */
+  onChange: (voiceId: string | null, own: OwnVoicePick | null) => void;
+  /** The stored own-voice marker for `value` (metadata.voiceOwn), so the
+   * "Current voice" row can name it when the own list cannot be read. */
+  valueOwn?: OwnVoicePick | null;
+  /** Playground params; absent key = engine default (see lib/voicePicker.ts). */
+  params: VoiceParams;
+  /** Receives NORMALIZED params (default-valued keys already dropped). */
+  onParamsChange: (params: VoiceParams) => void;
+  /**
+   * W5 (260817, china-compat): the user runs local TTS (BYOK backend with
+   * tts_engine 'local'). The ElevenLabs voice list, previews and the Calmness
+   * slider (an ElevenLabs synthesis param) are HIDDEN — only Pitch renders,
+   * since it applies locally through the pitch bus. The character's stored
+   * ElevenLabs voiceId is left untouched underneath: `value` is never changed
+   * from this mode, so cloud characters and a later engine switch keep it.
+   */
+  localTtsMode?: boolean;
+  /**
+   * Local TTS (260915): the companion whose local voice the pitch sample
+   * should use (Edit companion passes its id; the creation flow has none yet).
+   * main resolves gender from the companion exactly like a live call line, so
+   * the sample is the voice the player will actually hear, at the slider's
+   * pitch. Ignored outside localTtsMode.
+   */
+  previewCharacterId?: string;
+}
+
+export function VoicePicker({
+  value,
+  onChange,
+  params,
+  onParamsChange,
+  localTtsMode = false,
+  previewCharacterId,
+  valueOwn = null,
+}: VoicePickerProps): React.ReactElement {
+  const t = useT();
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  /** The user's own ElevenLabs voices (261019); null = loading / not asked. */
+  const [ownList, setOwnList] = useState<OwnVoiceList | null>(null);
+  const [ownRefreshing, setOwnRefreshing] = useState(false);
+  const ownVoices = ownList?.status === 'ok' ? ownList.voices : [];
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** null = probing; false disables sample playback with the quiet hint. */
+  const [samplesAvailable, setSamplesAvailable] = useState<boolean | null>(null);
+  /** User-chosen tab; null = derive from the selection (else Feminine). */
+  const [chosenTab, setChosenTab] = useState<VoiceTabKey | null>(null);
+
+  // Non-reactive playback internals.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Tears the playing clip out of the pitch bus (null when unshifted). */
+  const detachRef = useRef<(() => void) | null>(null);
+  const cacheRef = useRef<Map<string, ArrayBuffer>>(new Map());
+  const aliveRef = useRef(true);
+  /** Conversation language for bundled samples; 'en' until the config loads. */
+  const langRef = useRef('en');
+  const sliderIdBase = useId();
+
+  // Local backend with no ElevenLabs key (260907): the curated pool and the
+  // Auto assignment resolve to ElevenLabs voices, and neither the cloud proxy
+  // (no session) nor ElevenLabs (no key) can synthesize them, so a picked or
+  // auto-assigned voice is silent on calls. Warn on the picker itself rather
+  // than letting the companion go mute. null = probing (no warning yet).
+  const aiBackendKind = useCreditsStore((s) => s.ai_backend_kind);
+  const [hasElevenKey, setHasElevenKey] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void sei
+      .voiceElevenKeyStatus()
+      .then(({ present }) => {
+        if (alive) setHasElevenKey(present);
+      })
+      .catch(() => {
+        /* leave null — never warn on an unknown state */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const cloudVoicesUnavailable =
+    !localTtsMode && aiBackendKind === 'local' && hasElevenKey === false;
+
+  useEffect(() => {
+    // Re-arm on every (re)mount — StrictMode dev runs mount → cleanup → mount
+    // on the SAME instance, and the ref keeps its false from the first cleanup.
+    aliveRef.current = true;
+    // Build the pitch shifter while the player is still reading the voice list,
+    // so the first sample they play is already shifted (see toggleSample).
+    // 260915: warmed in local-TTS mode as well — its pitch sample (the only
+    // way to hear the slider without a call) plays through the same bus.
+    warmPitchBus();
+    // Local-TTS mode renders only the pitch slider plus its sample — no voice
+    // list to load, no ElevenLabs samples to probe.
+    if (localTtsMode) return;
+    void sei
+      .voiceListVoices()
+      .then((v) => {
+        if (aliveRef.current) setVoices(v);
+      })
+      .catch(() => {
+        if (aliveRef.current) setError(t('Could not load the voice list.'));
+      });
+    // Own ElevenLabs voices (261019). Separate from the pool on purpose: any
+    // failure here only changes the own-voice hint, never the built-in list.
+    loadOwnVoices(false);
+    // Conversation language, for picking the bundled sample file. Best-effort:
+    // a failed read leaves English, which always exists.
+    void sei
+      .getConfig()
+      .then((c) => {
+        langRef.current = c.chat_language ?? 'en';
+      })
+      .catch(() => {
+        /* keep 'en' */
+      });
+    // Probe sample availability (live-TTS fallback rows only); a failed or
+    // missing probe leaves samples enabled and the first play surfaces the
+    // real state reactively.
+    try {
+      void sei
+        .voicePreviewAvailable()
+        .then((ok) => {
+          if (aliveRef.current) setSamplesAvailable(ok);
+        })
+        .catch(() => {
+          if (aliveRef.current) setSamplesAvailable(true);
+        });
+    } catch {
+      setSamplesAvailable(true); // stale preload without the probe — stay permissive
+    }
+    return () => {
+      aliveRef.current = false;
+      stopPlayback();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function loadOwnVoices(refresh: boolean): void {
+    if (refresh) setOwnRefreshing(true);
+    try {
+      void sei
+        .voiceListOwnVoices({ refresh })
+        .then((list) => {
+          if (aliveRef.current) setOwnList(list);
+        })
+        .catch(() => {
+          if (aliveRef.current) setOwnList({ status: 'error', voices: [] });
+        })
+        .finally(() => {
+          if (aliveRef.current) setOwnRefreshing(false);
+        });
+    } catch {
+      // Stale preload without the channel: behave as before (no own tab).
+      setOwnRefreshing(false);
+    }
+  }
+
+  function stopPlayback(): void {
+    const el = audioRef.current;
+    if (el) {
+      try {
+        el.pause();
+        URL.revokeObjectURL(el.src);
+      } catch {
+        /* already torn down */
+      }
+      detachRef.current?.();
+      detachRef.current = null;
+      audioRef.current = null;
+    }
+    setPlayingId(null);
+  }
+
+  // ── Playground params (effective values; absent key = engine default) ────
+  const pitch = params.pitch ?? PITCH_DEFAULT;
+  const calmness = params.calmness ?? CALMNESS_DEFAULT;
+  /** Whether the SYNTHESIS differs from the bundled clips. Pitch is not part of
+   * this any more (260731): it is a playback effect, so a pitch-only tune can
+   * still preview from the bundled asset. */
+  const tuned = calmness !== CALMNESS_DEFAULT;
+  /** The playground needs a concrete voice — Auto / No voice can't preview.
+   * Local-TTS mode is always tunable: pitch applies to whatever local voice
+   * the runtime maps, independent of the (hidden) ElevenLabs selection. */
+  const tunable = localTtsMode || (value !== null && value !== NO_VOICE_ID);
+
+  /**
+   * Start playback of `url` shifted to `rate` (1 = as recorded), through the
+   * same pitch bus live calls use, so the sample is exactly what the player
+   * will hear. Resolves true once playback starts, false when the source fails
+   * to load or play, so callers can fall back.
+   */
+  function startAudio(url: string, voiceId: string, rate: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const el = new Audio(url);
+      const detachPitch = attachPitch(el, rate);
+      audioRef.current = el;
+      detachRef.current = detachPitch;
+      el.addEventListener(
+        'ended',
+        () => {
+          if (audioRef.current === el) stopPlayback();
+        },
+        { once: true },
+      );
+      el.addEventListener(
+        'error',
+        () => {
+          if (audioRef.current === el) stopPlayback();
+          resolve(false);
+        },
+        { once: true },
+      );
+      setPlayingId(voiceId);
+      void el.play().then(
+        () => resolve(true),
+        () => {
+          if (audioRef.current === el) stopPlayback();
+          resolve(false);
+        },
+      );
+    });
+  }
+
+  /** An own ElevenLabs voice at default calmness: ElevenLabs' own preview
+   * clip, fetched by main (it falls back to synthesizing the sample line
+   * through the key when the voice has no preview). Session-cached. */
+  async function playOwnPreview(voiceId: string): Promise<void> {
+    const key = `own|${voiceId}`;
+    let buf = cacheRef.current.get(key);
+    if (!buf) {
+      setLoadingId(voiceId);
+      buf = await sei.voiceOwnPreview({ voiceId });
+      cacheRef.current.set(key, buf);
+    }
+    if (!aliveRef.current) return;
+    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
+    await startAudio(url, voiceId, pitch);
+  }
+
+  /** Live TTS preview with the current params, session-cached per combo. Pitch
+   * is not part of the key: it does not change the bytes any more, only how
+   * they are played back. */
+  async function playTts(voiceId: string): Promise<void> {
+    const key = `${voiceId}|${calmness}`;
+    let buf = cacheRef.current.get(key);
+    if (!buf) {
+      setLoadingId(voiceId);
+      buf = await sei.voicePreview({ voiceId, calmness });
+      cacheRef.current.set(key, buf);
+    }
+    if (!aliveRef.current) return;
+    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
+    await startAudio(url, voiceId, pitch);
+  }
+
+  async function toggleSample(voiceId: string): Promise<void> {
+    if (playingId === voiceId) {
+      stopPlayback();
+      return;
+    }
+    // One sample at a time: starting a new one stops whatever is playing.
+    stopPlayback();
+    setError(null);
+    try {
+      // Unlike a call, a sample CAN wait for the shifter: the whole point of
+      // pressing play here is to hear the slider, so a sample that starts
+      // 200ms later is better than one that ignores it. Bounded, and a false
+      // just means the sample plays at its recorded pitch.
+      if (pitch !== PITCH_DEFAULT) await pitchReady();
+      if (!aliveRef.current) return;
+      if (!tuned && voices.some((v) => v.id === voiceId)) {
+        // Pool voice at default calmness: bundled sample asset — instant,
+        // offline, no sign-in, shifted locally to the chosen pitch. A load/play
+        // failure falls through to live TTS.
+        const ok = await startAudio(assetPathFor(voiceId, langRef.current), voiceId, pitch);
+        if (ok || !aliveRef.current) return;
+      }
+      if (!tuned && ownVoices.some((v) => v.id === voiceId)) {
+        await playOwnPreview(voiceId);
+        return;
+      }
+      await playTts(voiceId);
+    } catch (err) {
+      if (!aliveRef.current) return;
+      const msg = String((err as Error)?.message ?? '');
+      if (/VOICE_NO_SESSION/.test(msg)) {
+        setSamplesAvailable(false);
+      } else if (/VOICE_NEEDS_PAID_PLAN/.test(msg)) {
+        setError(t('Free ElevenLabs plans cannot play this voice through your key. Pick one of your own voices.'));
+      } else if (/VOICE_ELEVEN_QUOTA/.test(msg)) {
+        setError(t('Your ElevenLabs account is out of credits.'));
+      } else if (/VOICE_ELEVEN_KEY_INVALID/.test(msg)) {
+        setError(t('ElevenLabs rejected your key. Check it in Settings.'));
+      } else {
+        setError(t('Sample unavailable right now.'));
+      }
+    } finally {
+      if (aliveRef.current) setLoadingId(null);
+    }
+  }
+
+  const samplesOff = samplesAvailable === false;
+
+  /** Sentinel id for the local-TTS pitch sample in playingId / loadingId. */
+  const LOCAL_SAMPLE_ID = '__local-sample__';
+
+  /**
+   * Local TTS (260915): play the companion's LOCAL voice saying the preview
+   * line, shifted to the slider. Before this the slider had no sample in
+   * local mode (the ElevenLabs list and its play buttons are hidden), so a
+   * player dragging it heard nothing until the next call line and read the
+   * slider as broken. Synthesis is ~100 ms on the local pack; the shifter is
+   * awaited (bounded) so the sample never plays at the wrong pitch.
+   */
+  async function toggleLocalSample(): Promise<void> {
+    if (playingId === LOCAL_SAMPLE_ID) {
+      stopPlayback();
+      return;
+    }
+    stopPlayback();
+    setError(null);
+    setLoadingId(LOCAL_SAMPLE_ID);
+    try {
+      if (pitch !== PITCH_DEFAULT) await pitchReady();
+      if (!aliveRef.current) return;
+      const buf = await sei.voicePreview({
+        ...(value !== null && value !== NO_VOICE_ID ? { voiceId: value } : {}),
+        ...(previewCharacterId ? { characterId: previewCharacterId } : {}),
+      });
+      if (!aliveRef.current) return;
+      const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      const ok = await startAudio(url, LOCAL_SAMPLE_ID, pitch);
+      if (!ok && aliveRef.current) setError(t('Sample unavailable right now.'));
+    } catch (err) {
+      if (!aliveRef.current) return;
+      const msg = String((err as Error)?.message ?? '');
+      if (/VOICE_PACK_MISSING/.test(msg)) {
+        setError(t('Download a voice pack in Settings to hear a sample.'));
+      } else if (/SPEECH_RUNTIME_FAILED/.test(msg)) {
+        setError(t('Local speech cannot run on this install.'));
+      } else {
+        setError(t('Sample unavailable right now.'));
+      }
+    } finally {
+      if (aliveRef.current) setLoadingId(null);
+    }
+  }
+
+  function setPitchParam(next: number): void {
+    onParamsChange(normalizeVoiceParams({ pitch: next, calmness: params.calmness }));
+  }
+
+  function setCalmnessParam(next: number): void {
+    onParamsChange(normalizeVoiceParams({ pitch: params.pitch, calmness: next }));
+  }
+
+  function renderRow(
+    id: string,
+    title: React.ReactNode,
+    vibe: string,
+    label: string,
+    bundled = true,
+  ): React.ReactElement {
+    const selected = value === id;
+    // Tuned previews always need live TTS, even for bundled pool voices.
+    const needsTts = !bundled || tuned;
+    return (
+      <div key={id} className={`${styles.row} ${selected ? styles.selected : ''}`}>
+        <button
+          type="button"
+          className={styles.playBtn}
+          aria-label={
+            playingId === id
+              ? t('Stop {name} sample', { name: label })
+              : t('Play {name} sample', { name: label })
+          }
+          disabled={(samplesOff && needsTts) || (loadingId !== null && loadingId !== id)}
+          onClick={() => void toggleSample(id)}
+        >
+          {loadingId === id ? (
+            <span className={styles.loadingDot} aria-hidden="true" />
+          ) : playingId === id ? (
+            <StopIcon size={14} />
+          ) : (
+            <PlayIcon size={14} />
+          )}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={selected}
+          className={styles.rowBody}
+          onClick={() => {
+            const next = reduceSelection(value, id);
+            onChange(next, next === null ? null : ownVoicePickFor(next, ownVoices));
+          }}
+        >
+          <div className={styles.rowTitle}>{title}</div>
+          <div className={styles.rowVibe}>{vibe}</div>
+        </button>
+      </div>
+    );
+  }
+
+  // ── Tabs: only the active gender group's voices render. Default: the group
+  //    containing the current selection, else the first group (Feminine when
+  //    populated — GROUP_ORDER puts it first). Empty groups have no tab. ─────
+  const groups = groupVoices(voices);
+  const ownView = ownVoicesView(ownList);
+  const ownTabShown = ownView === 'tab';
+  const tabKeys: VoiceTabKey[] = [
+    ...(ownTabShown ? [OWN_TAB_KEY as VoiceTabKey] : []),
+    ...groups.map((g) => g.key),
+  ];
+  const activeTab: VoiceTabKey | null =
+    chosenTab !== null && tabKeys.includes(chosenTab)
+      ? chosenTab
+      : defaultVoiceTab(value, groups, ownTabShown ? ownVoices : null);
+  const activeGroup = groups.find((g) => g.key === activeTab) ?? null;
+  const unlisted = isUnlistedVoice(value, [...voices, ...ownVoices]);
+  // valueOwn only describes `value` when it is still the stored pick.
+  const unlistedOwn = unlisted && valueOwn ? valueOwn : null;
+
+  return (
+    <div className={styles.root} role="radiogroup" aria-label={t('Voice')}>
+      {localTtsMode ? null : (
+      <>
+      {cloudVoicesUnavailable ? (
+        <div className={styles.warnNote} role="alert">
+          {t(
+            'Not connected to Sei cloud or an ElevenLabs key. Custom voices will not play. Local voice packs still work.',
+          )}
+        </div>
+      ) : null}
+
+      {/* Auto — the recommended default. */}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={value === null}
+        className={`${styles.optionCard} ${value === null ? styles.selected : ''}`}
+        onClick={() => onChange(null, null)}
+      >
+        <div className={styles.rowTitle}>{t('Auto: let Sei pick')}</div>
+        <div className={styles.rowVibe}>
+          {t('A voice that fits their personality, never one another companion already uses. Recommended.')}
+        </div>
+      </button>
+
+      {/* No voice — a silent companion. */}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={value === NO_VOICE_ID}
+        className={`${styles.optionCard} ${value === NO_VOICE_ID ? styles.selected : ''}`}
+        onClick={() => onChange(reduceSelection(value, NO_VOICE_ID), null)}
+      >
+        <div className={styles.rowTitle}>{t('No voice')}</div>
+        <div className={styles.rowVibe}>
+          {t('A silent companion. They chat by text and stay quiet on voice calls.')}
+        </div>
+      </button>
+
+      {samplesOff && unlisted && !unlistedOwn ? (
+        <div className={styles.hint}>
+          {t('Sign in to play the current voice sample. Picking a voice still works.')}
+        </div>
+      ) : null}
+
+      {/* A voice assigned before the current pool curation: keep it visible
+          and selected instead of silently dropping it (Edit companion).
+          Rendered ABOVE the tabs so it shows from any tab. */}
+      {unlisted && value ? (
+        <section className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Current voice')}</h3>
+          {unlistedOwn
+            ? renderRow(
+                value,
+                unlistedOwn.name,
+                aiBackendKind === 'cloud-proxy'
+                  ? t('From your ElevenLabs account. Without your ElevenLabs key, a Sei voice speaks for them.')
+                  : t('From your ElevenLabs account. It plays only with your ElevenLabs key.'),
+                unlistedOwn.name,
+                false,
+              )
+            : renderRow(
+                value,
+                t('Current voice'),
+                t('Assigned from an earlier voice pool.'),
+                t('current voice'),
+                false,
+              )}
+        </section>
+      ) : null}
+
+      {elevenKeyHintShown(hasElevenKey, localTtsMode) ? (
+        <div className={styles.hint} data-testid="eleven-key-hint">
+          {t('Have your own ElevenLabs voices? Add your ElevenLabs key in Settings, under Voice.')}
+        </div>
+      ) : null}
+
+      {ownView === 'hint' ? (
+        <div className={styles.hint} role="status">
+          {ownList?.status === 'bad_key'
+            ? t('Could not read your ElevenLabs voices. Check your ElevenLabs key in Settings.')
+            : t('Could not load your ElevenLabs voices right now.')}
+        </div>
+      ) : null}
+
+      {tabKeys.length > 0 ? (
+        <div className={styles.tabs} role="tablist" aria-label={t('Voice group')}>
+          {ownTabShown ? (
+            <button
+              key={OWN_TAB_KEY}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === OWN_TAB_KEY}
+              className={activeTab === OWN_TAB_KEY ? `${styles.tab} ${styles.tabActive}` : styles.tab}
+              onClick={() => setChosenTab(OWN_TAB_KEY)}
+            >
+              {t('Your ElevenLabs voices')}
+            </button>
+          ) : null}
+          {groups.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              role="tab"
+              aria-selected={g.key === activeTab}
+              className={g.key === activeTab ? `${styles.tab} ${styles.tabActive}` : styles.tab}
+              onClick={() => setChosenTab(g.key)}
+            >
+              {t(g.title)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {activeTab !== OWN_TAB_KEY && activeGroup && poolUsesOwnKey(ownList, aiBackendKind) ? (
+        <div className={styles.hint}>
+          {t("Sei's voices play through your ElevenLabs key on paid ElevenLabs plans. On a free plan, use your own voices.")}
+        </div>
+      ) : null}
+
+      <div className={styles.list}>
+        {activeTab === OWN_TAB_KEY && ownTabShown ? (
+          <section className={styles.group}>
+            <div className={styles.ownHead}>
+              <span className={styles.hint}>
+                {ownVoices.length === 0
+                  ? t('No voices in your ElevenLabs account yet. Voices you clone, design or save there show up here.')
+                  : t('Voices from your own ElevenLabs account. They play through your key.')}
+              </span>
+              <button
+                type="button"
+                className={styles.tunerReset}
+                onClick={() => loadOwnVoices(true)}
+                disabled={ownRefreshing}
+              >
+                {t('Refresh')}
+              </button>
+            </div>
+            {ownVoices.map((v) =>
+              renderRow(
+                v.id,
+                <>
+                  {v.name}
+                  <span className={styles.rowMeta}>{t(ownVoiceCategoryLabel(v.category))}</span>
+                </>,
+                ownVoiceDetail(v) || t('From your ElevenLabs account.'),
+                v.name,
+                false,
+              ),
+            )}
+          </section>
+        ) : activeGroup ? (
+          <section className={styles.group}>
+            {activeGroup.voices.map((v) =>
+              renderRow(
+                v.id,
+                <>
+                  {v.label}
+                  <span className={styles.rowMeta}>{v.age}</span>
+                </>,
+                v.vibe,
+                v.label,
+              ),
+            )}
+          </section>
+        ) : null}
+      </div>
+      </>
+      )}
+
+      {/* ── Playground: pitch + calmness sliders (260725) ── */}
+      <section className={styles.tuner} aria-label={t('Tune the voice')}>
+        <h3 className={styles.groupTitle}>{t('Tune the voice')}</h3>
+        {!tunable ? <div className={styles.hint}>{t('Pick a voice to tune it.')}</div> : null}
+        {!localTtsMode && tunable && tuned && samplesOff ? (
+          <div className={styles.hint}>{t('Sign in to hear tuned samples.')}</div>
+        ) : null}
+
+        <div className={styles.tunerRow}>
+          <div className={styles.tunerHead}>
+            <label className={styles.tunerLabel} htmlFor={`${sliderIdBase}-pitch`}>
+              {t('Pitch')}
+            </label>
+            <span className={styles.tunerValue}>{pitch.toFixed(2)}</span>
+            {localTtsMode ? (
+              <button
+                type="button"
+                className={styles.playBtn}
+                aria-label={
+                  playingId === LOCAL_SAMPLE_ID ? t('Stop the pitch sample') : t('Hear the pitch')
+                }
+                title={playingId === LOCAL_SAMPLE_ID ? t('Stop the pitch sample') : t('Hear the pitch')}
+                disabled={loadingId !== null && loadingId !== LOCAL_SAMPLE_ID}
+                onClick={() => void toggleLocalSample()}
+              >
+                {loadingId === LOCAL_SAMPLE_ID ? (
+                  <span className={styles.loadingDot} aria-hidden="true" />
+                ) : playingId === LOCAL_SAMPLE_ID ? (
+                  <StopIcon size={14} />
+                ) : (
+                  <PlayIcon size={14} />
+                )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.tunerReset}
+              onClick={() => setPitchParam(PITCH_DEFAULT)}
+              disabled={!tunable || params.pitch === undefined}
+            >
+              {t('Reset')}
+            </button>
+          </div>
+          <input
+            id={`${sliderIdBase}-pitch`}
+            className={styles.tunerSlider}
+            type="range"
+            min={0.85}
+            max={1.4}
+            step={0.01}
+            value={pitch}
+            disabled={!tunable}
+            onChange={(e) => setPitchParam(Number(e.target.value))}
+          />
+          <div className={styles.tunerHint}>
+            {localTtsMode
+              ? t('Higher or lower voice. Speaking pace stays the same. Press play to hear it.')
+              : t('Higher or lower voice. Speaking pace stays the same.')}
+          </div>
+        </div>
+
+        {/* Calmness is ElevenLabs `stability` — a synthesis param the local
+            engine has no equivalent for, so local-TTS mode hides it. */}
+        {localTtsMode ? null : (
+        <div className={styles.tunerRow}>
+          <div className={styles.tunerHead}>
+            <label className={styles.tunerLabel} htmlFor={`${sliderIdBase}-calmness`}>
+              {t('Calmness')}
+            </label>
+            <span className={styles.tunerValue}>{calmness.toFixed(2)}</span>
+            <button
+              type="button"
+              className={styles.tunerReset}
+              onClick={() => setCalmnessParam(CALMNESS_DEFAULT)}
+              disabled={!tunable || params.calmness === undefined}
+            >
+              {t('Reset')}
+            </button>
+          </div>
+          <input
+            id={`${sliderIdBase}-calmness`}
+            className={styles.tunerSlider}
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={calmness}
+            disabled={!tunable}
+            onChange={(e) => setCalmnessParam(Number(e.target.value))}
+          />
+          <div className={styles.tunerHint}>
+            {t('Higher is steadier and more even. Lower is more dramatic.')}
+          </div>
+        </div>
+        )}
+      </section>
+
+      {error ? <div className={styles.error}>{error}</div> : null}
+    </div>
+  );
+}

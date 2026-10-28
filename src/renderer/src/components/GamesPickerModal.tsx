@@ -1,0 +1,273 @@
+/**
+ * GamesPickerModal — "Play together" tiled game grid (Phase 18/19).
+ *
+ * Opened from the chat header's Games button, the CharacterCard "Play" CTA, and
+ * the CharacterPage "Play together" deploy button. Clicking an available game
+ * tile opens that game's surface: chess slides its panel into the chat aside;
+ * Minecraft opens its launch panel there too (the launch panel owns the summon
+ * flow). Each available tile carries a bottom-right (i) affordance that shows a
+ * hover-only info popup (title, art, brief description; nothing clickable).
+ * Coming-soon tiles are dimmed placeholders; the "Suggest a game" tile opens
+ * the feedback form (same submit path as the Playtime screen's form).
+ * Scrim-click / ESC closes (ESC hides the popup first when one is showing).
+ *
+ * Source: .planning/design/app-chat-and-memory.md §5 (GamesPickerModal) + R7.
+ */
+
+import React, { useEffect, useRef, useState } from 'react';
+import { useUiStore } from '../lib/stores/useUiStore';
+import { useDataStore } from '../lib/stores/useDataStore';
+import { attemptSummon } from '../lib/summonFlow';
+import { openGame, requestGameLaunch, isBotGame, type LaunchGameId } from '../lib/gameLaunch';
+import { GAMES, type GameDef } from '../lib/games';
+import { visionBlocked, visionGateReason } from '../lib/visionGate';
+import { isBackseatGameId } from '@shared/backseatGames';
+import { MCBlock, GamepadIcon, InfoIcon, PlusIcon } from './icons';
+import { FeedbackModal } from './FeedbackModal';
+import { useT } from '../lib/i18n';
+import styles from './GamesPickerModal.module.css';
+
+export interface GamesPickerModalProps {
+  characterId: string;
+}
+
+/** Hover popup metrics — width fixed for placement math; height is estimated
+ * generously for the vertical clamp (the card is shorter in practice). */
+const POPUP_W = 250;
+const POPUP_EST_H = 260;
+const POPUP_GAP = 10;
+const POPUP_DELAY_MS = 250;
+
+interface InfoPopup {
+  game: GameDef;
+  x: number;
+  y: number;
+}
+
+export function GamesPickerModal({ characterId }: GamesPickerModalProps): React.ReactElement {
+  const openModal = useUiStore((s) => s.openModal);
+  const closeModal = useUiStore((s) => s.closeModal);
+  const character = useDataStore((s) => s.characters.find((c) => c.id === characterId));
+  const t = useT();
+  const companionName = character?.name ?? t('your companion');
+
+  // china-compat W9: Draw! is an image surface, so a text-only local model
+  // locks its tile (dimmed, not hidden) with the reason on hover. Only a
+  // confident 'no' locks; 'unknown' stays playable (main's drawStart gate is
+  // the authoritative backstop).
+  const llmVision = useUiStore((s) => s.llmVision);
+  const llmModel = useUiStore((s) => s.llmModel);
+  const drawVisionLocked = visionBlocked(llmVision);
+  // 260929: a backseat game tile (Roblox) is a screen share, so it locks the
+  // same way, with the screen-sharing reason.
+  const isVisionLocked = (g: GameDef): boolean =>
+    (g.id === 'draw' || isBackseatGameId(g.id)) && drawVisionLocked;
+  const lockReason = (g: GameDef): string =>
+    visionGateReason(t, isBackseatGameId(g.id) ? 'backseat' : 'draw', llmModel);
+
+  // ── Hover-only info popup ─────────────────────────────────────────────
+  const [popup, setPopup] = useState<InfoPopup | null>(null);
+  const popupRef = useRef<InfoPopup | null>(null);
+  popupRef.current = popup;
+  const showTimer = useRef<number | null>(null);
+
+  // "Suggest a game" (260725): the feedback form rides on top of the picker;
+  // its submit path is the same proxy feedback table as the Playtime form.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const suggestOpenRef = useRef(false);
+  suggestOpenRef.current = suggestOpen;
+
+  const cancelShow = (): void => {
+    if (showTimer.current !== null) {
+      window.clearTimeout(showTimer.current);
+      showTimer.current = null;
+    }
+  };
+
+  const hideInfo = (): void => {
+    cancelShow();
+    setPopup(null);
+  };
+
+  /** Schedule the popup after a short hover delay, anchored to the tile.
+   * Renders as a sibling of the modal panel (position: fixed) so the modal's
+   * overflow never clips it; placement prefers the tile's right side and flips
+   * left when that would leave the viewport. */
+  const scheduleInfo = (g: GameDef, affordance: HTMLElement): void => {
+    const tile = affordance.parentElement ?? affordance;
+    const rect = tile.getBoundingClientRect();
+    cancelShow();
+    showTimer.current = window.setTimeout(() => {
+      showTimer.current = null;
+      let x = rect.right + POPUP_GAP;
+      if (x + POPUP_W > window.innerWidth - 12) x = rect.left - POPUP_W - POPUP_GAP;
+      const y = Math.max(12, Math.min(rect.top, window.innerHeight - POPUP_EST_H));
+      setPopup({ game: g, x, y });
+    }, POPUP_DELAY_MS);
+  };
+
+  useEffect(() => cancelShow, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      // The open feedback form owns ESC (ModalShell closes itself).
+      if (suggestOpenRef.current) return;
+      // ESC dismisses the info popup first; a second ESC closes the picker.
+      if (popupRef.current) {
+        setPopup(null);
+        return;
+      }
+      closeModal();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [closeModal]);
+
+  const onPlay = (g: GameDef): void => {
+    if (!g.available) return;
+    if (isVisionLocked(g)) return;
+    if (g.id === 'suggest') {
+      hideInfo();
+      setSuggestOpen(true);
+      return;
+    }
+    // 260721: every tile routes through the SHARED launch gate
+    // (lib/gameLaunch). With another game active for this companion it shows
+    // the cross-launch confirm first; otherwise openGame mounts the picked
+    // surface in the chat's game area (chess card / Minecraft launch panel,
+    // or the live dashboard when the bot is already online).
+    // Game adapters (M0): the bot-backed games (stardew, dontstarve) route
+    // through the same gate and open their registered launch panel.
+    if (g.id === 'chess' || g.id === 'minecraft' || g.id === 'draw' || isBotGame(g.id)) {
+      const id = g.id as LaunchGameId;
+      closeModal();
+      requestGameLaunch(characterId, { id, name: g.name }, () => openGame(characterId, id));
+      return;
+    }
+    // 260929 backseat games (Roblox): not a surface of their own but a way
+    // into the screen share, through the one-time intro and the optional
+    // "which game" step (BackseatGameModal). Gated like a share, because a
+    // share cannot run beside a Minecraft summon.
+    if (isBackseatGameId(g.id)) {
+      closeModal();
+      requestGameLaunch(characterId, { id: 'backseat', name: t(g.name) }, () =>
+        openModal({ kind: 'backseat-game', characterId, gameId: g.id }),
+      );
+      return;
+    }
+    // Fallback for any future summon-launched game.
+    void attemptSummon(characterId);
+    closeModal();
+  };
+
+  return (
+    <div
+      className={styles.scrim}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="games-picker-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) closeModal();
+      }}
+    >
+      <div className={styles.modal} data-tutorial="games-modal">
+        <div className={styles.header}>
+          <h2 id="games-picker-title" className={styles.title}>
+            {t('Play together')}
+          </h2>
+        </div>
+        <div className={styles.grid}>
+          {GAMES.map((g) => {
+            const visionLocked = isVisionLocked(g);
+            return (
+              <div
+                key={g.id}
+                className={`${styles.tile} ${g.available && !visionLocked ? '' : styles.tileLocked} ${
+                  g.image ? styles.tileImage : ''
+                }`}
+                style={g.image ? { backgroundImage: `url(${g.image})` } : undefined}
+                // A locked tile explains itself on hover anywhere (there is no
+                // live (i) affordance to find), through the same info popup.
+                onMouseEnter={
+                  visionLocked
+                    ? (e) => scheduleInfo(g, e.currentTarget.firstElementChild as HTMLElement)
+                    : undefined
+                }
+                onMouseLeave={hideInfo}
+              >
+                <button
+                  type="button"
+                  className={styles.tileMain}
+                  disabled={!g.available || visionLocked}
+                  aria-disabled={!g.available || visionLocked}
+                  aria-label={visionLocked ? lockReason(g) : undefined}
+                  onClick={() => onPlay(g)}
+                >
+                  {g.image ? null : (
+                    <span className={styles.tileIcon}>
+                      {g.id === 'minecraft' ? (
+                        <MCBlock size={40} />
+                      ) : g.id === 'suggest' ? (
+                        <PlusIcon size={30} />
+                      ) : (
+                        <GamepadIcon size={30} />
+                      )}
+                    </span>
+                  )}
+                  <span className={styles.tileName}>{t(g.name)}</span>
+                </button>
+                {g.soon ? <span className={styles.soonTag}>{t('SOON')}</span> : null}
+                {g.available && !visionLocked ? (
+                  <span
+                    className={styles.infoHint}
+                    tabIndex={0}
+                    aria-label={t('About {name}', { name: t(g.name) })}
+                    onMouseEnter={(e) => scheduleInfo(g, e.currentTarget)}
+                    onMouseLeave={hideInfo}
+                    onFocus={(e) => scheduleInfo(g, e.currentTarget)}
+                    onBlur={hideInfo}
+                  >
+                    <InfoIcon size={16} />
+                  </span>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {popup ? (
+        <div
+          className={styles.infoPop}
+          style={{ left: popup.x, top: popup.y, width: POPUP_W }}
+          aria-hidden="true"
+        >
+          {popup.game.image ? (
+            <div
+              className={styles.infoPopArt}
+              style={{ backgroundImage: `url(${popup.game.image})` }}
+            />
+          ) : null}
+          <div className={styles.infoPopBody}>
+            <span className={styles.infoPopTitle}>{t(popup.game.name)}</span>
+            <p className={styles.infoPopText}>
+              {isVisionLocked(popup.game)
+                ? lockReason(popup.game)
+                : popup.game.description(companionName)}
+            </p>
+          </div>
+        </div>
+      ) : null}
+      {suggestOpen ? (
+        <FeedbackModal
+          title={t('Suggest a game')}
+          framing=""
+          fieldLabel={t('Game')}
+          placeholder={t('What game should we add?')}
+          doneNote={t('In the meantime, Backseat already works with any game on your screen.')}
+          onClose={() => setSuggestOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+}

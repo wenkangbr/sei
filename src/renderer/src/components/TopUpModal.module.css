@@ -1,0 +1,50 @@
+/**
+ * TopUpModal — two one-time extra-credit packages side by side.
+ * Sharp edges, Oswald display for the price, tokens only (no hex/px literals
+ * outside the shared spacing scale used across the modal family).
+ */
+
+.body {
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+
+.packs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+/* Solid surface card, mirrors CreditsScreen .planCard (260725): var(--bg4)
+   is light in light themes and dark in dark ones, and stays a visible step
+   off the modal's var(--bg2) panel in every theme. */
+.pack {
+  min-width: 0;
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  padding: 16px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.packPrice {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--text);
+}
+
+.packCredits {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.packAction {
+  margin-top: auto;
+  padding-top: 14px;
+}

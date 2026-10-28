@@ -1,0 +1,406 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            build_cmd: dist:mac
+            artifact_name: mac
+          - os: windows-latest
+            build_cmd: dist:win
+            artifact_name: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      # headless-gl (vision render path) builds from source via node-gyp, which needs
+      # a distutils-capable Python (removed from 3.12+). Provide 3.11 on every runner.
+      - name: Setup Python (distutils for headless-gl native build)
+        uses: actions/setup-python@v5
+        id: setup-python
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        env:
+          npm_config_python: ${{ steps.setup-python.outputs.python-path }}
+        run: npm ci
+
+      - name: Build (${{ matrix.os }})
+        env:
+          # Build-time config injected into the bundle (see electron.vite.config.ts).
+          # SUPABASE_* + SEI_PROXY_URL are public-by-design (RLS is the security
+          # gate). If these repo secrets are unset, cloud mode is disabled in the
+          # build but local (BYOK) mode + the build itself are unaffected.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SEI_PROXY_URL: ${{ secrets.SEI_PROXY_URL }}
+          # macOS Developer ID signing + notarytool. MUST be scoped to the mac
+          # leg — the old comment claimed these were "empty on Win/Linux;
+          # harmless" and that was wrong in the one way that mattered.
+          #
+          # 260803: CSC_LINK is a GENERIC electron-builder cert variable, not a
+          # mac one. On windows-latest, electron-builder imported the Apple
+          # Developer ID .p12 as the WINDOWS signing cert, signed the NSIS
+          # installer with it, and derived `publisherName: 'Developer ID
+          # Application: Shang Wang (7485LZ74DA)'` into the app-update.yml baked
+          # into the app. Windows has no trust path to Apple's root, so on every
+          # client Get-AuthenticodeSignature returned UnknownError rather than
+          # Valid; electron-updater's verifier gates the publisher comparison on
+          # Status === 0, fell through to "signed with incorrect certificate",
+          # and DELETED each fully-downloaded installer. Every Windows
+          # auto-update since has failed at 100%. See the guard step below.
+          CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
+          # Belt and braces: stop electron-builder picking up any cert from the
+          # runner's own store on the non-mac legs.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os == 'macos-latest' && 'true' || 'false' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows signing via Azure Trusted Signing. Entirely opt-in: with the
+          # secrets/variables below unset the build stays unsigned and declares
+          # no publisherName, which is a working configuration (clients skip
+          # signature verification). Signing turns on the moment all six are
+          # present — no code change required. electron-builder reads the three
+          # AZURE_* credentials from the environment (Entra ID service
+          # principal); the account/profile/endpoint are passed as config
+          # overrides below because `azureSignOptions.publisherName` is a
+          # REQUIRED field, so a half-filled block in electron-builder.yml would
+          # declare a publisher for an unsigned build — exactly the failure this
+          # workflow now guards against.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ vars.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ vars.AZURE_CERT_PROFILE }}
+          WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
+        shell: bash
+        run: |
+          # macOS code-signs every file in app.asar.unpacked; the prismarine-viewer
+          # texture tree (~32k files) exhausts the default fd limit at sign time
+          # (EMFILE). Raise the soft limit before packaging. No-op on Windows.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # ulimit alone wasn't enough — the per-process kernel cap is below the
+            # 32k texture-file count. Raise the kernel limits too, then the soft limit.
+            sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=524288 2>/dev/null || true
+            ulimit -n 524288 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+          fi
+
+          extra=()
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # All-or-nothing: a partial Azure config must never produce a build
+            # that declares a publisher it cannot actually sign as.
+            if [ -n "$AZURE_TENANT_ID" ] && [ -n "$AZURE_CLIENT_ID" ] && [ -n "$AZURE_CLIENT_SECRET" ] \
+               && [ -n "$AZURE_ENDPOINT" ] && [ -n "$AZURE_CODE_SIGNING_ACCOUNT" ] \
+               && [ -n "$AZURE_CERT_PROFILE" ] && [ -n "$WIN_PUBLISHER_NAME" ]; then
+              echo "Windows: signing via Azure Trusted Signing as '$WIN_PUBLISHER_NAME'"
+              extra+=( "-c.win.azureSignOptions.publisherName=$WIN_PUBLISHER_NAME" )
+              extra+=( "-c.win.azureSignOptions.endpoint=$AZURE_ENDPOINT" )
+              extra+=( "-c.win.azureSignOptions.codeSigningAccountName=$AZURE_CODE_SIGNING_ACCOUNT" )
+              extra+=( "-c.win.azureSignOptions.certificateProfileName=$AZURE_CERT_PROFILE" )
+            else
+              echo "Windows: Azure Trusted Signing not configured — building UNSIGNED (auto-update still works; SmartScreen will warn)."
+            fi
+          fi
+
+          npm run ${{ matrix.build_cmd }} -- "${extra[@]}"
+
+      - name: Build game packs
+        # 260908 game packs: the Minecraft adapter's runtime (mineflayer,
+        # minecraft-data, prismarine-viewer, gl, ...) lives in the
+        # packs/minecraft npm workspace and is NOT in the installer. Each leg
+        # builds the pack(s) for its OS from the same hoisted node_modules the
+        # app was just packaged from (scripts/build-game-pack.mjs): mac builds
+        # arm64 AND x64 (x64 cross-rebuilds gl with node-gyp --arch=x64 and
+        # fetches canvas's x64 N-API prebuild, the same cross path
+        # electron-builder's install-app-deps takes for the x64 app); windows
+        # builds x64. The zips go up with the installers; the <zip>.meta.json
+        # sidecars go up separately so the release job can write ONE manifest
+        # without npm ci.
+        env:
+          npm_config_python: ${{ steps.setup-python.outputs.python-path }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            node scripts/build-game-pack.mjs minecraft --platform darwin --arch arm64 --out release/packs
+            node scripts/build-game-pack.mjs minecraft --platform darwin --arch x64 --out release/packs
+            # Platform-neutral packs (game-side mods only, no node_modules
+            # natives) are built ONCE, on the mac leg, as any-any.
+            node scripts/build-game-pack.mjs dontstarve --platform any --arch any --out release/packs
+            # The Stardew pack wraps the CHECKED-IN mod build (assets/stardew-mod,
+            # see .gitignore): the SMAPI mod compiles only against the game's
+            # assemblies, which no runner has.
+            node scripts/build-game-pack.mjs stardew --platform any --arch any --skip-build --out release/packs
+          else
+            node scripts/build-game-pack.mjs minecraft --platform win32 --arch x64 --out release/packs
+          fi
+          ls -la release/packs/
+
+      - name: Verify cloud config baked into bundle
+        # v0.2.0 shipped with empty SUPABASE_URL/ANON because the build-time
+        # define injection silently produced "" — getClient() then throws
+        # SUPABASE_ENV_MISSING and ALL cloud paths (Google OAuth, email sign-in,
+        # World/browse) die. This gate makes that impossible to ship again:
+        # we require the real Supabase host to actually appear in dist/main.
+        # Test stubs use stub/test/example.supabase.co, so matching the real
+        # project host cannot be satisfied by accident.
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_URL / SUPABASE_ANON_KEY repo secret is empty — cloud sign-in would ship broken. Set them in repo Settings → Secrets."
+            exit 1
+          fi
+          host="${SUPABASE_URL#https://}"; host="${host%%/*}"
+          if ! grep -rqF "$host" dist/main; then
+            echo "::error::SUPABASE_URL was set but '$host' is NOT in dist/main — build-time define injection failed (check electron.vite.config.ts)."
+            exit 1
+          fi
+          if ! grep -rqF "$SUPABASE_ANON_KEY" dist/main; then
+            echo "::error::SUPABASE_ANON_KEY was set but not baked into dist/main — define injection failed."
+            exit 1
+          fi
+          # KusArt portrait generation moved behind the proxy (260709) — the
+          # client must NOT contain a KusArt key. Inverse gate: fail if one
+          # ever leaks into the bundle again.
+          if grep -rqE "ak_[0-9a-f]{64}" dist/main; then
+            echo "::error::A KusArt-shaped API key (ak_...) is baked into dist/main — the key must live only in the proxy's Fly secrets."
+            exit 1
+          fi
+          echo "✓ cloud config baked in ($host + anon key in dist/main, no KusArt key)"
+
+      - name: Verify Windows update signature contract
+        # 260803: v0.4.x-v0.5.2 shipped a Windows app-update.yml carrying
+        # `publisherName: 'Developer ID Application: Shang Wang (7485LZ74DA)'`,
+        # leaked from the mac CSC_LINK secret (see the Build step). Because a
+        # non-null publisherName makes electron-updater run
+        # Get-AuthenticodeSignature and REJECT anything that is not Status=Valid,
+        # every Windows client deleted its fully-downloaded installer and froze
+        # the update UI at 100%. It was undetectable from the build: the
+        # installer packaged, uploaded and installed fine — only auto-update
+        # broke, and only on the NEXT release.
+        #
+        # This step reproduces the client's own check on the runner. Two modes:
+        #   WIN_PUBLISHER_NAME unset  → build must be UNSIGNED and carry NO
+        #                               publisherName (verification skipped
+        #                               client-side; today's intended state).
+        #   WIN_PUBLISHER_NAME set    → installer must be signed, chain to a
+        #                               trusted root (Status=Valid), and the
+        #                               app-update.yml publisherName must match
+        #                               it exactly.
+        # Set the repo variable only once real Windows signing is in place.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
+        run: |
+          $cfg = 'release/win-unpacked/resources/app-update.yml'
+          if (-not (Test-Path $cfg)) { Write-Output "::error::$cfg not found"; exit 1 }
+          $yml = Get-Content $cfg -Raw
+          Write-Output "app-update.yml:`n$yml"
+
+          # publisherName is a LIST in app-update.yml, because electron-updater's
+          # verifier takes an array of acceptable names. electron-builder writes
+          #
+          #   publisherName:
+          #     - CN=Shang Wang, O=Shang Wang, L=Los Angeles, S=ca, C=US
+          #
+          # The first cut of this step matched `publisherName:\s*(.+?)$`, and in
+          # .NET `\s` spans newlines, so it captured "- CN=Shang Wang, ..." with
+          # the sequence dash attached and failed a build whose signature was
+          # perfectly valid. Parse both shapes line by line instead, and keep the
+          # whole list: an array with more than one entry is legal and every
+          # entry must be checked.
+          # Only POSITIVE -match below: -notmatch's effect on $Matches is not
+          # worth relying on, and this step gets one shot per 40-minute build.
+          $lines = $yml -split '\r?\n'
+          $declaredNames = @()
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*publisherName:\s*(.*)$') {
+              $inline = $Matches[1].Trim()
+              if ($inline) {
+                $declaredNames = @($inline)
+              } else {
+                for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                  if ($lines[$j] -match '^\s*-\s*(.+?)\s*$') { $declaredNames += $Matches[1] } else { break }
+                }
+              }
+              break
+            }
+          }
+          $declaredNames = @($declaredNames | ForEach-Object { $_.Trim().Trim(("'", '"') -join '') } | Where-Object { $_ })
+          $declared = $declaredNames -join ' | '
+          Write-Output "parsed publisherName entries: $($declaredNames.Count) [$declared]"
+
+          # Hard stop on the exact regression, whatever else is configured.
+          if ($declaredNames | Where-Object { $_ -like '*Developer ID Application*' }) {
+            Write-Output "::error::app-update.yml publisherName is an APPLE Developer ID ('$declared'). Windows cannot build a trust chain to Apple's root, so every client will reject and delete its download. The mac CSC_LINK secret has leaked into the Windows build again."
+            exit 1
+          }
+
+          $exe = Get-ChildItem release -Filter 'Sei-win-*.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Output '::error::no Sei-win-*.exe in release/'; exit 1 }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+          Write-Output "installer: $($exe.Name)  status=$($sig.Status)  subject=$($sig.SignerCertificate.Subject)"
+
+          $expected = $env:WIN_PUBLISHER_NAME
+          if ([string]::IsNullOrWhiteSpace($expected)) {
+            if ($declaredNames.Count -gt 0) {
+              Write-Output "::error::app-update.yml declares publisherName '$declared' but the WIN_PUBLISHER_NAME repo variable is unset. An unsigned build MUST NOT declare a publisher, or clients will verify against it and reject every update."
+              exit 1
+            }
+            if ($sig.Status -eq 'Valid') {
+              Write-Output "::warning::installer is validly signed but no publisherName is declared. Set the WIN_PUBLISHER_NAME repo variable to enable update signature verification."
+            }
+            Write-Output '✓ unsigned Windows build declares no publisherName (client skips signature verification)'
+            exit 0
+          }
+
+          if ($sig.Status -ne 'Valid') {
+            Write-Output "::error::WIN_PUBLISHER_NAME is set but the installer signature is '$($sig.Status)', not Valid. electron-updater rejects anything that is not Valid BEFORE it compares the publisher name."
+            exit 1
+          }
+          # Every declared name must be one the client can actually verify, so
+          # compare the whole list rather than just asking whether it contains
+          # the expected one. electron-updater accepts a build if ANY entry
+          # matches, which would let a stale extra entry pass unnoticed.
+          if ($declaredNames.Count -ne 1 -or $declaredNames[0] -cne $expected) {
+            Write-Output "::error::app-update.yml publisherName [$declared] is not exactly WIN_PUBLISHER_NAME '$expected'. electron-updater compares every DN component with a strict equality check, so this must match verbatim, case included."
+            exit 1
+          }
+          if ($sig.SignerCertificate.Subject -notlike "*$expected*") {
+            Write-Output "::error::signing cert subject '$($sig.SignerCertificate.Subject)' does not contain the declared publisherName '$expected'."
+            exit 1
+          }
+          Write-Output "✓ Windows installer signed and Valid; publisherName '$expected' matches the cert"
+
+      - name: Collect release assets (installers + auto-update feed)
+        # CRITICAL: electron-updater needs the *.yml feed files, the macOS *.zip
+        # (the mac auto-update payload — the dmg is download-only), and *.blockmap
+        # files. Uploading only the dmg/exe silently breaks auto-update. Grab
+        # every publishable artifact from release/ (nullglob drops the misses).
+        # The feed glob is *.yml, not latest*.yml: on a pre-release version
+        # electron-builder's detectUpdateChannel names the feed after the semver
+        # pre-release id (0.5.0-beta.1 -> beta-mac.yml), and a latest*.yml glob
+        # would upload no feed at all, breaking auto-update for beta users.
+        # builder-effective-config.yaml is .yaml, so it is not swept up.
+        shell: bash
+        run: |
+          shopt -s nullglob
+          assets=(release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.blockmap release/*.yml)
+          mkdir -p dist-release
+          cp "${assets[@]}" dist-release/
+          # 260908 game packs: the pack zips are release assets like any other
+          # (mirror-release.yml files them under updates/<channel>/, which is
+          # where the client's mirror URL looks: shared/gamePacks.ts
+          # gamePackMirrorDir). The meta sidecars are NOT assets;
+          # they ride a separate artifact into the release job's manifest step.
+          cp release/packs/sei-pack-*.zip dist-release/
+          mkdir -p dist-packmeta
+          cp release/packs/*.zip.meta.json dist-packmeta/
+          # builder-debug.yml is electron-builder's own debug dump, swept up by
+          # the *.yml glob. It is not an update feed and must not ship.
+          rm -f dist-release/builder-debug.yml
+          echo "Collected for ${{ matrix.artifact_name }}:"
+          ls -1 dist-release/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: sei-${{ matrix.artifact_name }}
+          path: dist-release/
+          if-no-files-found: error
+
+      - name: Upload game pack metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: packmeta-${{ matrix.artifact_name }}
+          path: dist-packmeta/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Publish whatever platform artifacts DID build, even if a sibling leg
+    # failed. The procgen deps (img2skin=file:../skin-gen, soulcaster=
+    # file:../soulcaster) aren't resolvable in a single-repo CI checkout, so the
+    # Windows leg currently fails while macOS builds+notarizes fine. `always()`
+    # lets the draft ship the good mac assets now; Windows is a known follow-up.
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      # Only for scripts/build-game-pack-manifest.mjs, which is dependency-free
+      # in --from-meta mode (no npm ci here).
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sei-*
+          path: artifacts
+
+      - name: Download game pack metadata
+        uses: actions/download-artifact@v8
+        with:
+          pattern: packmeta-*
+          path: pack-meta
+
+      - name: Write the game pack manifest
+        # 260908: one game-packs-<version>.json across both legs, listing every
+        # pack with sha256 / size / treeHash. It is uploaded as a release asset
+        # beside the zips (and mirrored with them). A leg that failed simply
+        # contributes no packs, the same way it contributes no installer.
+        run: |
+          if find pack-meta -name '*.zip.meta.json' | grep -q .; then
+            node scripts/build-game-pack-manifest.mjs pack-meta --from-meta --out artifacts/game-packs
+            cat artifacts/game-packs/game-packs-*.json
+          else
+            echo "::warning::no game pack metadata was uploaded; the release ships without a game-packs manifest"
+          fi
+
+      - name: List collected assets
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release (draft — review assets before publishing)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Force the pre-release flag on pre-release tags
+        # The `prerelease:` input above is NOT enough. electron-builder's own
+        # publish step runs during the build legs and creates the GitHub release
+        # first, with prerelease=false; action-gh-release then reuses that
+        # release ("Using release N ... instead of duplicate draft") and never
+        # applies the flag. Left unset, publishing a beta makes it GitHub's
+        # "Latest" release, so /releases/latest serves it to every STABLE user
+        # even though they never opted into the beta channel.
+        if: contains(github.ref_name, '-')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --prerelease --repo "${{ github.repository }}"

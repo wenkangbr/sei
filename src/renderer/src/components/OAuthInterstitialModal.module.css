@@ -1,0 +1,32 @@
+/* OAuthInterstitialModal — centered 460px modal shown while Google OAuth
+ * runs in the system browser (D-05).
+ *
+ * Scrim + 460px modal mirrors SignInModal.module.css (same scrim alpha 0.45,
+ * same fadeUp/fade animations, same padding). z-index 1100 sits above
+ * SignInModal (z-index 1000) so the interstitial wins when both are mounted
+ * (per Task 2's "render as sibling" implementation).
+ *
+ * Source: 10-UI-SPEC §Google OAuth interstitial modal + §Layout rules.
+ */
+
+/* Scrim, panel, and title now come from ModalShell (tier 'stacked'). */
+
+.body {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+.countdown {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.success {
+  font-size: 15px;
+  color: var(--text);
+  margin: 0;
+}
+

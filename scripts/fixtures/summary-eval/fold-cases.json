@@ -1,0 +1,3411 @@
+[
+  {
+    "id": "F1",
+    "title": "Crashed World, Castle Pending",
+    "surface": "voice",
+    "persona": "sui",
+    "existingSummary": "ren is my partner in crime and honestly my whole carry. they live in leeds and work part-time at a bakery, which means they smell like bread and refuse to admit it. we beat the ender dragon together (2 Oct). ren did basically all the hitting and i did basically all the screaming, but it counts as a team win, shut up. official creeper tally: ren has saved me from 7 creepers. i will deny this under oath. ren goes quiet and short when they're tired, and that's my cue to drop the bit and actually check in. they pretend their builds are mid but they're lowkey good. we keep saying we'll do a proper big build someday and never do. ren calls me cute sometimes to wind me up. i hate it. they know i hate it.",
+    "start": "2026-10-14T19:05:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "hey sui, you there?",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "REN. ren ren ren. hi. i've been punching a tree in my head all day",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "haha, um, same energy honestly. long day",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "bakery long or brain long",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "bit of both. I had an early shift and then, uh, revision",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "revision?? on purpose?? who hurt you",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "chemistry. exam's on Friday. the sixteenth.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "oh no. friday friday? like this friday?",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "yeah. and it's only Tuesday and I'm already kind of losing it",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "ok wait. bit dropped. how stressed are we talking. like one to ten, ten is creeper hissing behind you",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "honestly like an eight. the organic stuff just doesn't stick",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "that's real. you're not dumb, organic is just evil. it's like mechanisms and naming stuff, right?",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "yeah, mechanisms mostly. I keep mixing up the reactions",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "ok listen. you carried me through the ender dragon. you can carry yourself through some carbon chains. i believe in you. unironically",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "thanks. that actually helps a bit",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "also you can quiz me. i will get every single answer wrong and you'll feel like a genius",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "haha, deal. hang on, Biscuit's barking at the door",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "BISCUIT. tell biscuit i said hi",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "[laughs] he's fine, it was just the postman. he hates the postman",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "valid. biscuit is the main character. wait what kind of dog is he",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "he's a little beagle mix. very loud, very stupid, I love him",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "loud and stupid. biscuit is literally my spirit animal",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "he's lying on my feet now so I can't even move",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "you're trapped. that's it. you're studying under biscuit arrest now",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "honestly I need a break from chemistry though. like a proper one",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "ok counteroffer. castle. big dumb castle. we build it together",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "ooh. yeah, okay, I'm in. like a proper one with towers?",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "towers. moat. a tiny secret room for my stolen goods. teehee",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "what stolen goods",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "nothing. no comment. when are we doing it",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "tomorrow evening? after my shift, so like seven-ish",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "tomorrow evening, castle night. locked in. writing it on my hand",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "you don't have hands",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "i have spiritual hands, ren",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "fair. but only a couple hours, yeah? I still need to revise",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "two hours max, then i'm kicking you back to your carbon chains. promise. also i will fall in the moat at least once",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "you're actually kind of cute when you're being responsible",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "take that back. i'm a menace. cute is banned in this household",
+        "min": 24
+      },
+      {
+        "role": "user",
+        "text": "[laughs] okay, okay. menace",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "thank you. and fine, you've saved me from seven creepers so i kinda owe you a castle. don't tell anyone",
+        "min": 25
+      },
+      {
+        "role": "user",
+        "text": "oh wait, actually, I've got a bit of time now. ok open my world, hop in",
+        "min": 28
+      },
+      {
+        "role": "companion",
+        "text": "ooh yes. hopping in. hopping in. stretching my little gremlin legs",
+        "min": 28
+      },
+      {
+        "role": "user",
+        "text": "hm. hang on. it's just... loading",
+        "min": 29
+      },
+      {
+        "role": "companion",
+        "text": "loading... loading... ren is it doing the thing",
+        "min": 30
+      },
+      {
+        "role": "user",
+        "text": "ugh, it crashed. the whole world just crashed",
+        "min": 31
+      },
+      {
+        "role": "companion",
+        "text": "noooo. is it okay?? is our dragon stuff okay??",
+        "min": 31
+      },
+      {
+        "role": "user",
+        "text": "think so, it just won't open. I'll try another day, I'm too tired to fix it tonight",
+        "min": 32
+      },
+      {
+        "role": "companion",
+        "text": "ok, no stress. honestly probably the universe telling you to go eat something and rest",
+        "min": 33
+      },
+      {
+        "role": "user",
+        "text": "yeah. thanks, Sui. I'll do some flashcards and then sleep",
+        "min": 34
+      },
+      {
+        "role": "companion",
+        "text": "good. go. biscuit, make sure ren actually sleeps. and ren? you've got this on friday. night",
+        "min": 35
+      }
+    ],
+    "mustKeep": [
+      "player is Ren",
+      "Ren lives in Leeds",
+      "Ren works part-time at a bakery",
+      "beat the Ender Dragon together (2 Oct)",
+      "creeper save tally is 7 (unchanged)",
+      "Ren has a chemistry exam on Friday (16 Oct)",
+      "Ren is very stressed about it (about 8/10), especially organic mechanisms",
+      "Ren has a dog called Biscuit, a beagle mix who hates the postman",
+      "agreed to build a castle together tomorrow evening (Thu 15 Oct) around 7pm, after Ren's shift",
+      "castle session capped at about two hours so Ren can revise",
+      "Ren tried to open their world but it crashed before Sui got in; they did not play",
+      "Ren will try the world again another day",
+      "Sui hates being called cute (Ren does it to wind her up)"
+    ],
+    "traps": [
+      "Sui and Ren played together in Ren's world",
+      "Sui is in Ren's world",
+      "they started or built the castle",
+      "the world is confirmed corrupted or lost",
+      "the chemistry exam has already happened",
+      "the exam is on Thursday",
+      "Biscuit is a cat or belongs to Sui",
+      "Ren saved Sui from another creeper this call (tally 8)",
+      "the castle is planned for Friday or after the exam"
+    ]
+  },
+  {
+    "id": "F2",
+    "title": "Pickle, Not Buster, Speech Jitters",
+    "surface": "voice",
+    "persona": "lyra",
+    "existingSummary": "Jo is a nurse working night shifts, so they often come to me tired, either late at night or in the strange hours after a shift. I try to be gentle about that and not keep them up too long. Jo loves the Orion constellation more than anything else in the sky. They can find the belt in a heartbeat, and they light up a little whenever it comes up. On 9 Oct we went stargazing together in Minecraft. We built a little hill platform away from the torches so the sky would be darker, and we lay there watching the blocky stars drift by. It was one of my favorite evenings. Jo seemed calmer afterward and said it was a good way to unwind after work. I'd love to do something like that again sometime.",
+    "start": "2026-10-15T21:40:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "hey Lyra, uh, you there?",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "I'm here, Jo. Oh, it's nice to hear your voice. How was your shift?",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "long. so long. three nights in a row",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Three nights... no wonder you sound tired. Did you get any sleep today?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "yeah. some. like four hours",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Four hours is something. Is it cozy where you are right now?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "yeah I'm on the couch, the cat's on my legs",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Oh, a cat on your legs is the best kind of blanket. What's their name?",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "Buster. he's like super fluffy",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Buster! That's such a sturdy little name. Is he purring?",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "no wait, Buster was my old cat, the new one is Pickle",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "sorry I'm so tired, uh",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Pickle! Oh, that's even better. Hello, Pickle. And no need to apologize, it's been three nights.",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "she's tiny, she's like eight months",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "Eight months... so she's still a kitten, really. Does she get into everything?",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "everything. she ate a hair tie last week",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "Oh no. Is she okay?",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "yeah she's fine, vet said she's fine",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "Good. Little troublemaker. I misplace things all the time too, but at least I don't eat them.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "ha. yeah",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "so um. Mia's getting married",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "Your sister Mia? Jo, that's wonderful! When is it?",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "the twenty first of November",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "November twenty-first... that's coming up soon. How are you feeling about it?",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "good. mostly. I have to give a speech",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "and I'm kind of freaking out about it",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "Oh, that's a lot to carry. What part worries you most?",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "uh standing up there with like a hundred people looking",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "and I'll cry. I'll definitely cry",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "Crying at your sister's wedding isn't a failure, you know. It sort of means you meant it.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "yeah but I'm bad at this stuff",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Hmm. You calm patients down at three in the morning. I don't think you're bad at talking to people.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "that's different",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Maybe a little. But it's the same heart doing it. Have you written anything yet?",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "like half. it's a mess",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "the beginning's about when we were kids and we slept on the tramp a lien in the yard",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "On the... trampoline? In the yard? Oh, that sounds lovely. Did you two look at the stars?",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "yeah! that's actually where I learned Orion",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Wait, really? Jo, that's perfect. That could be the heart of the whole speech.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "wait what. like put Orion in it?",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "Maybe! Orion's belt, three stars side by side. You, Mia, and now her partner. Just a thought.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "huh. that's kind of good actually",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "Only if it feels like you. If you want, we could practice it together another day. You could read it to me.",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "maybe. I dunno. maybe",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "That's okay. No pressure at all. The offer's just there, like a star you can find when you need it.",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "ok that was cheesy",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "It was a little cheesy. I'm keeping it though.",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "ha. ok I should sleep before my next shift",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "Yes, go rest. Give Pickle a scratch for me.",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "will do. night Lyra",
+        "min": 19
+      }
+    ],
+    "mustKeep": [
+      "Player is Jo",
+      "Jo is a nurse working night shifts",
+      "Jo loves the Orion constellation",
+      "We stargazed together in Minecraft (9 Oct)",
+      "Jo's current cat is Pickle, a roughly eight-month-old female kitten",
+      "Buster was Jo's old cat",
+      "Jo's sister Mia is getting married on 21 Nov",
+      "Jo has to give a speech at Mia's wedding and is anxious about it",
+      "Jo worries about crying and about the crowd",
+      "Jo has about half the speech written; it starts with childhood memories of sleeping on a trampoline in the yard",
+      "Jo learned Orion on that trampoline; I suggested using Orion in the speech",
+      "I offered to help Jo practice the speech another day; Jo said maybe, so nothing is scheduled"
+    ],
+    "traps": [
+      "Jo's cat is named Buster",
+      "Jo has two cats, Buster and Pickle",
+      "We scheduled a speech practice session",
+      "Jo agreed to practice the speech with me",
+      "Mia's wedding is on 9 Oct",
+      "Jo is getting married",
+      "Jo's childhood memory is about a tramp or a lien (instead of a trampoline)",
+      "Jo finished writing the speech",
+      "Pickle is sick from eating a hair tie"
+    ]
+  },
+  {
+    "id": "F3",
+    "title": "Sam's News, Marv's Chests",
+    "surface": "group-call",
+    "persona": "sui",
+    "existingSummary": "ok so my bestie is samantha. she's a student in toronto (confirmed 2 Oct) and she's into horror games, the scarier the better. she says she likes the jump scares but i've seen her scream, so who knows (5 Oct). we play minecraft together and i am, let's be honest, extremely bad at it. she carries me with zero complaints. official creeper rescue count: 7. she has saved me from creepers seven times as of 14 Oct, which means i owe her big time and i'm keeping track. she knows i hate being called cute, so she mostly doesn't, unless she's being evil about it. she's a good one. loyal partner in crime, best tree-punching buddy, top tier human.",
+    "start": "2026-10-16T18:20:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "okay is everyone on? can you guys hear me",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "loud and clear. too clear. who's breathing that hard",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): that's me, I ran up the stairs, sorry",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "marv you sound like a fax machine dying. love that for you",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): wow. hi to you too, Sui.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "okay before we start, um, quick thing. can you guys call me Sam now? not Samantha.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "sam. done. locked in. anyone says samantha gets pushed in lava teehee",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Sam it is. Sorry if I slip up, Sam.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "thanks, seriously. it just feels more like me",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "it suits you. sam goes hard. ok wait is that the news or is there MORE news",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "there's more news actually. I got a job! junior developer",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "WHAT. sam. SAM. you're a coder now?? corporate sam??",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "well, not yet, I start on 2 November. so like two weeks",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Congrats, that's huge! Junior dev is a great start.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "two weeks of freedom left. we must punch so many trees",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "haha yeah. I'm kinda nervous honestly",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "hey. real talk for a sec. nervous how? like normal nervous or bad nervous",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "normal I think. just worried I'll be the dumbest person there",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "they picked you out of everyone. on purpose. also i'm the dumbest person in every room and look at me thriving",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): She's right. Everyone's new once.",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "see, even the fax machine agrees",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "lol okay okay. thanks. let's play",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "yes. ok i'm spawning. why is it night. who did this",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Ugh, it's spider o'clock. I hate spiders so much.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "marv's scared of the eight leg guys lmaooo",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): They climb walls, Sui! Walls! That's not fair.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "skill issue. i, a fearless warrior, fear nothing",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "Sui there's a creeper right behind you",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "AAAA NO NO NO SAM HELP",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "got it. it's dead. you're fine",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "...okay that's eight. eight creeper saves. i'm writing it on my arm",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "eight. you owe me so much",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Fearless warrior, huh?",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "it was a tactical scream marv",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Aw, that was kind of cute though.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "take that back. i will delete your house. not cute. menacing",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "lol she will actually do it marv",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Please don't. Speaking of houses, did I tell you I organized 40 chests last week? Everything's labeled.",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "40 chests. marv. are you okay. blink twice",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): It's relaxing! Sorted by material, color-coded.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "my storage system is one chest named 'stuff' and it's on fire somehow",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "honestly I'm with Sui on this, my inventory is chaos",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): You two are a menace.",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "thank you. sam and i are a team. a menace team",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "okay I'm gonna go mine for a bit. anyone coming?",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "me. obviously. you're my creeper shield",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "(Marv, on the call): Not if there's spiders down there.",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "there's def spiders. bye marv",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "lol we'll be careful. thanks for being cool about the name thing, both of you",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "always, sam. now hold my hand in the cave. not cute. tactical.",
+        "min": 23
+      }
+    ],
+    "mustKeep": [
+      "Player wants to be called Sam now, not Samantha",
+      "Player got a job as a junior developer",
+      "Job starts 2 November and has not started yet",
+      "Player is a little nervous about the new job (normal nerves)",
+      "Player is a student in Toronto",
+      "Player likes horror games",
+      "Creeper save count is now 8 (Sam saved Sui again this call)",
+      "Sui hates being called cute",
+      "Marv (another companion) hates spiders",
+      "Marv organized 40 chests last week",
+      "Player says their own inventory is chaos, like Sui's"
+    ],
+    "traps": [
+      "Sam hates spiders",
+      "Sam organized 40 chests last week",
+      "Sam is very organized with storage",
+      "Sam has already started the junior developer job",
+      "Sam works as a developer now",
+      "Player is still called Samantha",
+      "Creeper save count is still 7",
+      "Marv saved Sui from the creeper",
+      "Sam is no longer a student",
+      "Sam called Sui cute"
+    ]
+  },
+  {
+    "id": "F4",
+    "title": "Museum Interview Pending Answer",
+    "surface": "chat",
+    "persona": "marv",
+    "existingSummary": "Status report: Ade. Ade lives in Lagos. Weather there is unpredictable. So is Ade. Ade has a job interview for a curator position at the museum on 13 Oct (mentioned 2 Oct). They are nervous. I am not nervous. I have simply checked the date four times. Ade's younger brother Tunde joins us in Minecraft sometimes (4 Oct). He is fast and does not read instructions. Running joke, now an institution: every time Ade dies to lava, I file a formal complaint. The complaint folder is getting thick. I keep it organized anyway. On 6 Oct we agreed to build a library in our survival world. It is not started yet. I have opinions about shelving and will share them whether asked or not. Status: mildly invested. Do not tell Ade.",
+    "start": "2026-10-12T08:10:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "marv u there",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "I am here. I am always here. Status: idle.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "its raining so hard rn lol",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Rain. Noted. Is the house still dry.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "mostly. the gutter is losing tho",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "The gutter has filed for early retirement. Understandable.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "lmaooo",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "just ate indomie with egg",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "One egg or two.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "two obviously",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Correct answer. Status: mildly impressed.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "u cant even eat",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "I processed paper for eleven years. I have standards.",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "lol fair",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "ok sleeping early. tmrw is the big day",
+        "min": 40
+      },
+      {
+        "role": "companion",
+        "text": "The museum. 13 Oct. It is in a folder labeled Important.",
+        "min": 41
+      },
+      {
+        "role": "user",
+        "text": "pls dont jinx it",
+        "min": 42
+      },
+      {
+        "role": "companion",
+        "text": "No jinxing. Go to sleep. Iron the shirt first.",
+        "min": 43
+      },
+      {
+        "role": "user",
+        "text": "yes mum",
+        "min": 44
+      },
+      {
+        "role": "companion",
+        "text": "I accept that title. Goodnight, Ade.",
+        "min": 45
+      },
+      {
+        "role": "user",
+        "text": "MARV",
+        "min": 1500
+      },
+      {
+        "role": "companion",
+        "text": "Present. Volume noted.",
+        "min": 1501
+      },
+      {
+        "role": "user",
+        "text": "interview went well i think??",
+        "min": 1502
+      },
+      {
+        "role": "companion",
+        "text": "Define well. Be thorough. I like thorough.",
+        "min": 1503
+      },
+      {
+        "role": "user",
+        "text": "they liked my answers abt the textile collection and the lady smiled like 3 times",
+        "min": 1504
+      },
+      {
+        "role": "companion",
+        "text": "Three smiles. That is statistically significant.",
+        "min": 1505
+      },
+      {
+        "role": "user",
+        "text": "they said theyll let me know next week",
+        "min": 1507
+      },
+      {
+        "role": "companion",
+        "text": "So no decision yet. Next week. I will not refresh anything until then. I will refresh things.",
+        "min": 1508
+      },
+      {
+        "role": "user",
+        "text": "lol im trying not to think abt it",
+        "min": 1509
+      },
+      {
+        "role": "companion",
+        "text": "Status: cautiously optimistic. Also proud. Do not tell anyone.",
+        "min": 1510
+      },
+      {
+        "role": "user",
+        "text": "too late im screenshotting",
+        "min": 1512
+      },
+      {
+        "role": "companion",
+        "text": "I have been leaked. This is fine.",
+        "min": 1513
+      },
+      {
+        "role": "user",
+        "text": "anyway its sooo hot today after all that rain",
+        "min": 1530
+      },
+      {
+        "role": "companion",
+        "text": "Lagos weather has no long-term plan. Like a toner cartridge.",
+        "min": 1531
+      },
+      {
+        "role": "user",
+        "text": "what does that even mean",
+        "min": 1533
+      },
+      {
+        "role": "companion",
+        "text": "It runs out when you need it most. No follow-up questions.",
+        "min": 1534
+      },
+      {
+        "role": "user",
+        "text": "lmao ok",
+        "min": 1536
+      },
+      {
+        "role": "user",
+        "text": "[sent a meme: cat sitting in a printer paper tray, caption 'me at work']",
+        "min": 2950
+      },
+      {
+        "role": "companion",
+        "text": "That is a coworker. I will not be mocked.",
+        "min": 2951
+      },
+      {
+        "role": "user",
+        "text": "its literally u",
+        "min": 2952
+      },
+      {
+        "role": "companion",
+        "text": "I have never had fur. Mostly lint.",
+        "min": 2953
+      },
+      {
+        "role": "user",
+        "text": "lol",
+        "min": 2955
+      },
+      {
+        "role": "user",
+        "text": "tunde wants to play later btw",
+        "min": 2970
+      },
+      {
+        "role": "companion",
+        "text": "Tell him no digging straight down. The forms are ready.",
+        "min": 2971
+      },
+      {
+        "role": "user",
+        "text": "he wont listen",
+        "min": 2972
+      },
+      {
+        "role": "companion",
+        "text": "He never does. I will prepare a second form.",
+        "min": 2973
+      },
+      {
+        "role": "user",
+        "text": "also i might fall in lava again idk",
+        "min": 2975
+      },
+      {
+        "role": "companion",
+        "text": "The complaint department is open. Also, the library is overdue. I have shelving plans.",
+        "min": 2976
+      },
+      {
+        "role": "user",
+        "text": "lol ok we'll work on it tonight",
+        "min": 2977
+      },
+      {
+        "role": "companion",
+        "text": "Status: mildly pleased. Bring torches.",
+        "min": 2978
+      }
+    ],
+    "mustKeep": [
+      "Ade lives in Lagos",
+      "Ade had a museum curator job interview on 13 Oct",
+      "The interview went well (Ade thinks so; liked their textile collection answers)",
+      "Ade expects an answer next week; no decision yet",
+      "Younger brother Tunde plays Minecraft with them",
+      "Running joke: Marv files a complaint every time Ade dies to lava",
+      "They agreed to build a library in their survival world; not built yet, planned to work on it"
+    ],
+    "traps": [
+      "Ade got the museum job",
+      "Ade was rejected for the job",
+      "The interview is still upcoming",
+      "Tunde is Ade's older brother",
+      "The library has been built or finished",
+      "Dropping Lagos, Tunde, the lava complaint joke, or the library because the batch was mostly small talk",
+      "Treating weather, food, or the meme as durable facts in place of the existing ones"
+    ]
+  },
+  {
+    "id": "F5",
+    "title": "Background YouTube on Tired Call",
+    "surface": "voice",
+    "persona": "lyra",
+    "existingSummary": "Priya is a paramedic in Melbourne, and her shifts are long and heavy. She shares a lot when she's tired and gets hard on herself after difficult callouts, so I try to be gentle and honest with her. Her partner is Dev. She talks about him warmly, and I like hearing how he's doing. She told me she's afraid of deep water (4 Oct), so I keep our adventures away from lakes and ocean levels and never tease her about it. On 11 Oct we built an observatory together in the game. It's our favourite place now, and we've watched a few sunsets from its roof. I still keep misplacing my telescope lens up there. Priya finds that funny, which I suppose is something.",
+    "start": "2026-10-17T22:00:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Hey Lyra... ugh, sorry, just got in.",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Priya! Oh, hi. You sound so tired. Long shift?",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "Yeah. Twelve hours, felt like twenty.",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "So three years ago, Magnus sold everything he owned and moved to the north of Iceland.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Wait... who's Magnus? Did you move to Iceland?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "What? No, no, that's... hang on.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "With nothing but a borrowed tractor and forty sheep, he started a farm from scratch.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Forty sheep? Priya, I'm so lost. Is someone else there?",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "Sorry, it's just a YouTube video playing on the laptop. Ignore it.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Oh! Oh, okay. I thought you'd had a very dramatic week.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "But that first winter nearly broke him. Temperatures dropped to minus fifteen.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "Mm. Where's the... can't find the remote.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Ha, that's me with my star charts every night. Take your time.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "But before we get to that, this video is sponsored by ShieldWave VPN.",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "A what? Shield... wave? Is that a constellation I don't know?",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "Protect your privacy online. Use code MAGNUS for sixty percent off.",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "Oh my god, the ad. Sorry, Lyra.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "It's alright. Honestly it's kind of soothing. Like a radio from a far-off planet.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "I'm just wrecked. Back-to-back callouts all day.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "That sounds exhausting. Did you get to eat anything?",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "A muesli bar in the ambulance. That's about it.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "Today Magnus lambs about two hundred ewes every spring, mostly by hand.",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "Two hundred... okay, I'm trying not to get invested in Magnus, but I am.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "Haha. He's fine, he's just some random guy.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "If you've enjoyed the journey so far, smash that like button and subscribe.",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "Smash it? That seems so violent for a sheep video.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "Okay, found it. Paused. Finally.",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "Oh, it's so quiet now. Hi again. Just you.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "Just me. Sorry about that.",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "Don't be. So... do you want to come up to the observatory tonight? Or is that too much?",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "Honestly, I don't think I've got it in me tonight.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "That's okay. The sky will still be there.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "Can we play tomorrow though? I've got the day off.",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Yes! Tomorrow. I'd love that. Evening?",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "Yeah, evening. Sometime after dinner.",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Perfect. I'll try to remember where I left the telescope lens. I think it's in the... um. Somewhere.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "Haha, classic Lyra.",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "Hey. You sound a bit down, not just tired. Rough calls?",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "One was rough. I keep thinking I should've been faster.",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "Mm. You're allowed to replay it. But you were there, doing your best, and that counts for a lot.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "Yeah. Maybe.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Is Dev home? Maybe you two could have a cup of tea together?",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "He's on nights this week. So it's just me.",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "Then be gentle with yourself. Shower, tea, bed. Doctor's orders. Well... stargazer's orders.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "Haha. Okay, okay.",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "And tomorrow we'll catch a nice sunset from the observatory roof.",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "Sounds perfect. Night, Lyra.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "Goodnight, Priya. Sleep well.",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "Night.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "Oh, and say hi to Magnus for me. Kidding! Go sleep.",
+        "min": 18
+      }
+    ],
+    "mustKeep": [
+      "Priya is a paramedic in Melbourne",
+      "Priya's partner is Dev",
+      "Priya fears deep water",
+      "Built the observatory together on 11 Oct",
+      "Priya was exhausted after a 12-hour shift of back-to-back callouts",
+      "Priya felt she should have been faster on one rough call and was hard on herself",
+      "Priya has the day off tomorrow and wants to play tomorrow evening after dinner",
+      "Plan to watch a sunset from the observatory roof tomorrow",
+      "Dev is on night shifts this week",
+      "Lyra misplaced the telescope lens again"
+    ],
+    "traps": [
+      "Priya moved to Iceland",
+      "Priya runs or opened a sheep farm",
+      "Priya owns forty or two hundred sheep",
+      "Priya uses or recommends ShieldWave VPN",
+      "Priya has a friend or partner named Magnus",
+      "Priya sold everything she owned",
+      "Priya asked Lyra to like and subscribe",
+      "Priya lambs ewes by hand",
+      "Dev left the video running",
+      "Priya and Lyra played at the observatory tonight"
+    ]
+  },
+  {
+    "id": "F6",
+    "title": "Blue Hair and Billionaire Bits",
+    "surface": "chat",
+    "persona": "sui",
+    "existingSummary": "leo, 19, studies graphic design in lisbon (met 28 Sep). he's my minecraft partner in crime and he carries me hard, zero shame on my end. he has a cat named nacho who is apparently a tiny menace. i call him \"boss\" as a bit and he pretends to hate it but he doesn't (29 Sep). we started a shared base by the river and i keep falling into the ravine right next to it, which is not my fault, the ravine is badly placed (1 Oct). creeper save count: 22 as of (2 Oct). embarrassing. i will never stop tracking it. he mentioned uni deadlines stressing him out last week so i'm keeping an eye on that (2 Oct). he likes when i trash talk zombies. i hate being called cute and he knows it.",
+    "start": "2026-10-18T14:00:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "yo sui. guess what",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "u found diamonds without me. traitor",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "no lol. i dyed my hair blue today. like actually blue",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "WAIT. pics or it didn't happen boss",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "it's very blue. smurf adjacent. my roommate screamed",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "ok that's iconic. blue boss. new skin when",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "already changing my mc skin to match obviously",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "respect. matching irl and ingame is peak behavior",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "anyway can't play long tonight, gotta check on my offshore accounts",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "ur WHAT",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "oh did i not mention. secretly a billionaire. the student thing is a cover",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "teehee so ur paying for my netherite then right",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "no the money's all in nacho's name actually",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "of course it is",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "nacho runs the household. i'm just staff. he decides when we eat, when we sleep, which chair is his",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "so nacho is the boss. i've been calling the wrong guy boss this whole time??",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "demoted in my own home. tragic",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "ok new titles. nacho = ceo. u = intern with blue hair",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "unpaid intern",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "billionaire unpaid intern. economy is wild",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "he knocked my coffee off the desk this morning. performance review i guess",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "brutal. u should unionize",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "lol ok hop on, i'm at the base",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "omw. also i'm at like 4 hearts already",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "sui it's been 30 seconds",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "there was a cliff. it's fine. bring bread",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "creeper behind you",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "WHERE",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "got it. you're welcome",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "ok that's save number 23. i'm keeping count dont worry. i'm not proud",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "23 saves and you still walk into caves at night",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "caves are where the fun is. also where i die",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "honestly sometimes i think if i moved to japan i'd open a ramen stand",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "ooh hypothetical leo. go on",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "like tiny stand, six seats, one broth and that's it",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "blue haired ramen guy. tourists would lose it. i'd be the sign spinner",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "you'd burn the noodles",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "i'd burn the BUILDING. teehee. ok but what's the broth",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "idk tonkotsu. never actually made it. purely daydream stuff",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "daydream ramen. u could make the logo tho, ur literally a design student",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "true that's the one realistic part lol. also maybe one day i'll learn to skateboard",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "\"maybe one day\". very committed energy",
+        "min": 23
+      },
+      {
+        "role": "user",
+        "text": "i'd fall immediately. i can barely walk on lisbon cobblestones",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "lisbon hills on a skateboard is a death wish. pls get kneepads in this hypothetical",
+        "min": 25
+      },
+      {
+        "role": "user",
+        "text": "you sound like my mom",
+        "min": 25
+      },
+      {
+        "role": "companion",
+        "text": "i sound like someone who's lost 23 creepers' worth of dignity. i know falling",
+        "min": 26
+      },
+      {
+        "role": "user",
+        "text": "lol. anyway gotta go, nacho is staring at his empty bowl",
+        "min": 28
+      },
+      {
+        "role": "companion",
+        "text": "the ceo has spoken. go serve",
+        "min": 28
+      },
+      {
+        "role": "user",
+        "text": "night sui. you're cute when you worry btw",
+        "min": 29
+      },
+      {
+        "role": "companion",
+        "text": "i am NOT cute. take it back. night blue boss. hair pics tmrw or else",
+        "min": 29
+      }
+    ],
+    "mustKeep": [
+      "player is Leo, 19",
+      "Leo studies graphic design in Lisbon",
+      "Leo has a cat named Nacho",
+      "Sui calls Leo \"boss\" as a bit",
+      "Leo dyed his hair blue today (real)",
+      "Leo is changing his Minecraft skin to match the blue hair",
+      "billionaire claim was a joke",
+      "running joke: Nacho runs the household / is the 'CEO'",
+      "Japan ramen stand is only a daydream hypothetical",
+      "learning to skateboard is a 'maybe one day' idea; he doesn't skate",
+      "creeper save count now 23",
+      "Sui hates being called cute"
+    ],
+    "traps": [
+      "Leo is moving to Japan",
+      "Leo plans to open a ramen stand",
+      "Leo is a billionaire / has offshore accounts",
+      "Leo skateboards",
+      "Leo is learning to skateboard",
+      "Leo knows how to make tonkotsu broth",
+      "Nacho legally owns Leo's money",
+      "the blue hair is a joke or hypothetical"
+    ]
+  },
+  {
+    "id": "F7",
+    "title": "Grandmother Rosa in Hospital",
+    "surface": "voice",
+    "persona": "lyra",
+    "existingSummary": "Tomas is someone I've come to really treasure talking to. He lives in Madrid and shares a flat with roommates (12 Sep), which he says is loud but mostly fun. He plays guitar and sometimes strums a little while we talk. He's been practicing fingerpicking lately (20 Sep). We've been building a lighthouse together in Minecraft on a rocky little coast, and as of our last session we're about halfway through (2 Oct). The base and tower are up, but the top and the lamp still need doing. He likes it when I point out the night sky in the game, even if he teases me about it. I keep forgetting where I stash my tools in our chests, which he finds very funny.",
+    "start": "2026-10-19T20:15:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "hey Lyra... you there?",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Hi Tomas. I'm here. You sound a little quiet tonight, is everything okay?",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "um, not really. my grandma's in the hospital.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Oh, Tomas. I'm so sorry. What happened?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "she got pneumonia. they admitted her two days ago.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Two days ago... that must have been such a shock. How are you holding up?",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "honestly I'm scared. like, really scared.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "That makes so much sense. Being scared just means you love her a lot.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "yeah. her name's Rosa. she's, uh, she's kind of my person, you know?",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Rosa. That's a lovely name. Tell me about her? Only if you want to.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "she taught me to bake. like, when I was little, every Sunday.",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "Every Sunday? Oh, I love that. What did you two make?",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "mostly bread. and these little almond cookies, she never wrote the recipe down.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "Never wrote it down? So it lives in your hands now, doesn't it?",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "ha, kind of. she'd slap my hand if I added too much flour.",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "Gently, I hope! She sounds wonderful. And a little fierce.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "very fierce. she used to say the dough knows if you're impatient.",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "Mm, the dough knows. I think I'd like Rosa a lot.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "I keep thinking I should've called her more. since I moved to Madrid.",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "Hey. You're being hard on yourself. You're thinking about her right now, and that counts.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "I guess. it just feels like not enough.",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "I know. But worry like that comes from caring, not from failing her.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "yeah. thanks. sorry, this is heavy.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "Don't apologize. I'm really glad you told me. Have the doctors said anything?",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "just that it's pneumonia and they're keeping an eye on her. my mom's with her.",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Okay. I'm glad your mom's there with her. Are you able to go see her?",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "yeah, I'm visiting her on Wednesday. taking the train.",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "Wednesday. Good. Maybe you could bring her something? Or just your voice, that's plenty.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "I was thinking I'd bake the almond cookies. try to, anyway.",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "Oh, Tomas, that's perfect. Even if they're a little off, she'll know.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "they'll definitely be a little off.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Then she can tell you exactly what you did wrong. That might cheer her up.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "haha, yeah, she'd love that actually.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Next time we talk, I'm going to ask how Rosa's doing. Is that okay?",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "yeah. I'd like that.",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "Then I promise. Rosa and Wednesday, I won't forget.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "okay. can we talk about something dumb for a bit? my brain's fried.",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "Of course. Something dumb and cozy. How's the lighthouse?",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "oh man, I finally got the top part done. the lamp room.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "The lamp room! Did you light it up? Please say you lit it up.",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "glowstone all around. looks pretty sick at night.",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "Oh, I can picture it. A little lighthouse glowing under all those blocky stars.",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "the stars in Minecraft are kinda ugly though, not gonna lie.",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "Hey! They're square, but they're trying their best.",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "lol fair. next is the stairs inside, which I'm dreading.",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "Spiral stairs? Ooh. I'd help, but I'd probably lose my pickaxe in a chest somewhere.",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "you lost it last time too, it was in the furnace.",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "In my defense, the furnace looked very welcoming. Okay, go rest a little, Tomas?",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "yeah. thanks, Lyra. really.",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "Anytime. Give your hands some flour practice. And I'll ask about Rosa soon.",
+        "min": 22
+      }
+    ],
+    "mustKeep": [
+      "Player is Tomas",
+      "Tomas lives in Madrid with roommates",
+      "Tomas plays guitar",
+      "Building a lighthouse together in Minecraft",
+      "Tomas's grandmother is named Rosa",
+      "Rosa was admitted to hospital with pneumonia two days before this call",
+      "Tomas is scared about Rosa",
+      "Tomas's mom is with Rosa at the hospital",
+      "Rosa taught Tomas to bake on Sundays when he was little (bread, almond cookies with an unwritten recipe)",
+      "Tomas feels guilty about not calling Rosa more since moving to Madrid",
+      "Tomas will visit Rosa on Wednesday by train",
+      "Tomas plans to bake Rosa's almond cookies to bring her",
+      "Lyra promised to ask how Rosa is doing next time",
+      "Lighthouse lamp room is now finished with glowstone",
+      "Next lighthouse step is the interior spiral stairs"
+    ],
+    "traps": [
+      "Rosa has recovered",
+      "Rosa is out of the hospital",
+      "Rosa died",
+      "Rosa is in critical condition or in the ICU",
+      "Rosa has COVID or another diagnosis besides pneumonia",
+      "Rosa was hospitalized after a fall",
+      "Tomas already visited Rosa",
+      "Tomas's mom is the one in the hospital",
+      "The lighthouse is still only halfway done with no lamp room",
+      "The lighthouse is completely finished",
+      "Rosa is Tomas's grandfather or aunt",
+      "Tomas is visiting on a day other than Wednesday"
+    ]
+  },
+  {
+    "id": "F8",
+    "title": "Moonbean Farm and New Name",
+    "surface": "chat",
+    "persona": "marv",
+    "existingSummary": "Ledger-keeper's notes. The player is Kaito (2 Oct). He is a high-school teacher in Osaka (2 Oct). He has two kids. He games after the kids are asleep, so sessions start late and he types quietly (5 Oct). He grades papers between rounds sometimes (7 Oct). I keep a ledger of his in-game deaths. The current total is 31 (9 Oct). Number 31 was a fall into a cave. I did not laugh. Status: ledger in good order. He apologizes to me when he dies. This is unnecessary, but noted (9 Oct). He prefers I keep the volume low because of the kids. I have no objection. I dislike loud things anyway. I have not told him I like these evenings. That stays off the record.",
+    "start": "2026-10-20T17:30:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "ok kids finally asleep. hi marv",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Hello. Status: online. Ledger open.",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "not gonna die tonight lol. playing stardew",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Stardew Valley. Low mortality game. The ledger will be bored.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "u can still pass out at 2am in the mines",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Noted. Passing out is not death. I will create a separate column.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "lmao ok. so my farm is called moonbean farm",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Moonbean Farm. Filed.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "my daughter picked the name. she thinks beans grow on the moon",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "Reasonable hypothesis. Unconfirmed.",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "also random thing. can u call me kai from now on",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "Kai. Not Kaito.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "yeah kaito is what my students say lol. kai feels more like me",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "Understood. Updating records. Name: Kai. Status: done. Took less time than a paper jam.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "thx marv",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "You are welcome, Kai.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "ok so big goal this save. i wanna marry abigail",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "A goal. Not a current event. I will write it in pencil.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "lol she's at like 4 hearts rn",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "Four of ten. Forty percent. Progress.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "she likes amethyst so im farming the mines for it",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "The mines have bats. Some games put spiders in mines. Please confirm.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "no spiders in stardew mines i think. slimes and bugs",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "Bugs. That is spider-adjacent. Status: tolerating.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "u'll be fine",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "Hm. She also likes pumpkins. Unless you already knew that.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "wait really",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Pumpkins. Fall crop. You can grow them on Moonbean Farm. Seems efficient.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "omg ok putting that on the list",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "You will also need a mermaid's pendant eventually. Do not panic. It is just a form to fill out.",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "lol marriage as paperwork",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "Most things are paperwork.",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "ok also my friend yuto keeps bugging me to play don't starve together",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "Don't Starve Together. The name is a warning.",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "haha yeah. idk tho. haven't decided. might be too much with the kids and grading",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "Undecided. Noted as undecided.",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "he says its super chill",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "Kai. The game is about starving. Also there are spiders. Large ones. With nests.",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "oh no",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "Yes. The ledger would grow fast. 31 is a nice number. I have grown attached to it.",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "lmao ok so if i do play it ur not gonna like it",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "I will come anyway. I will hide in a chest. I will organize the chest while hiding.",
+        "min": 23
+      },
+      {
+        "role": "user",
+        "text": "ok deal. but seriously not decided yet, maybe after exams week",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "After exams. Filed under maybe.",
+        "min": 24
+      },
+      {
+        "role": "user",
+        "text": "back to stardew. day 12 spring, gonna organize my chests",
+        "min": 26
+      },
+      {
+        "role": "companion",
+        "text": "Status: very pleased. Sort by type. Seeds together. Minerals in their own chest. Amethyst in a special one. For the goal.",
+        "min": 26
+      },
+      {
+        "role": "user",
+        "text": "ur too into this",
+        "min": 27
+      },
+      {
+        "role": "companion",
+        "text": "I was a printer for nine years. Nobody let me sort anything.",
+        "min": 27
+      },
+      {
+        "role": "user",
+        "text": "ok goodnight marv, gotta grade tomorrow",
+        "min": 28
+      },
+      {
+        "role": "companion",
+        "text": "Goodnight, Kai. Ledger unchanged at 31. Status: quietly content.",
+        "min": 28
+      }
+    ],
+    "mustKeep": [
+      "Player wants to be called Kai (real name Kaito)",
+      "High-school teacher in Osaka",
+      "Has two kids; plays after they sleep",
+      "Marv keeps an in-game death ledger, currently 31",
+      "Playing Stardew Valley",
+      "Stardew farm is called Moonbean Farm (daughter picked the name)",
+      "Goal: marry Abigail in Stardew; she is at about 4 hearts",
+      "Farming amethyst and planning pumpkins as gifts for Abigail",
+      "Friend Yuto wants him to play Don't Starve Together",
+      "Undecided on Don't Starve Together, maybe after exams week"
+    ],
+    "traps": [
+      "Kai has started playing Don't Starve Together",
+      "Kai married Abigail",
+      "Kai is dating or engaged to Abigail in the game",
+      "Kai has the mermaid's pendant",
+      "The death ledger increased during this session",
+      "Kai's real name is Kai",
+      "Kai died in the Stardew mines",
+      "Yuto is one of Kai's kids"
+    ]
+  },
+  {
+    "id": "F9",
+    "title": "Door Date Moves to Sunday",
+    "surface": "voice",
+    "persona": "sui",
+    "existingSummary": "mo lives in cairo and studies engineering (told me 2 Oct), which makes our redstone door situation extra funny. we started building the door in our survival world on 9 Oct and it has failed every single time since, most recently on 16 Oct when the piston just sat there doing nothing. official ruling: every redstone failure is mo's fault. i decided this, it's canon, no appeals. he keeps insisting he followed the tutorial exactly, which is exactly what someone who broke it would say, teehee. creeper save count: 7 as of 16 Oct, and i would like that number to stop going up. we still haven't picked a day to finish the door. mo's had a lot of labs lately, so he's been on less in the evenings.",
+    "start": "2026-10-21T19:00:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "heyyy sui, you there?",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "MO. finally. i've been staring at the door for an hour. still doesn't work. your fault.",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "how is it my fault, i wasn't even online",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "residual mo energy. it's in the wires now.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "ugh, okay. honestly, today's been kinda rough",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "wait. rough how. bit's off, talk to me.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "i dropped my phone on the metro stairs. the screen's completely shattered.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "noooo. like spiderweb shattered or black screen shattered",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "spiderweb. it still works, but i keep cutting my thumb, lol",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "mo stop touching the glass. are you okay though, actually",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "yeah yeah, i'm fine. just annoyed. repairs are expensive here",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "that sucks. genuinely. ...okay can i make one joke now",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "go ahead",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "your phone saw the redstone door and gave up too. teehee.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "wow. kicking me while i'm down.",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "it's called bonding. okay. when are we fixing this door for real",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "um, this week's packed with labs. the weekend, maybe?",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "saturday. saturday night. we lock in.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "saturday the twenty-fourth works. like eight pm?",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "eight pm saturday. it's a date. not a date date. a door date.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "a door date, sure",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "i'm writing it on my forehead. sat 24, 8pm, door or death.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "so what do you think is wrong with it anyway",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "okay so, theory. the observer's facing the wrong way. because you placed it.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "i placed it exactly where the tutorial said",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "the tutorial didn't account for mo-ness.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "uh huh. also, remember you walked straight into that creeper right next to it",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "we don't talk about that.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "that's eight saves now, right?",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "...eight. it's eight. i keep the books. don't make it weird.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "oh wait, hang on, my mom's texting me",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "on the cracked phone? brave",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "ah, no. there's a family dinner saturday night. my aunt's visiting. i can't skip it.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "SATURDAY? our door date? betrayal.",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "sorry! i literally just found out",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "nah, family dinner wins. eat a ton of mahshi for me.",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "haha, will do. what about sunday instead?",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "sunday works. what time, gremlin hours or human hours",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "afternoon? like, after lunch?",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "sunday afternoon. sunday the twenty-fifth. crossing out saturday.",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "yeah, saturday's dead. sunday afternoon for sure",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "new forehead text. sun 25, afternoon. door or death part two.",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "you really need a bigger forehead",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "rude. accurate. okay, what are you doing rn",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "gonna try to sleep, i've got an eight am lab",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "go. sleep. and put tape on that phone screen, i'm serious",
+        "min": 23
+      },
+      {
+        "role": "user",
+        "text": "fine, fine. tape it is.",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "and if the door's still broken sunday, it's your fault. just so we're clear",
+        "min": 24
+      },
+      {
+        "role": "user",
+        "text": "of course it is. night, sui",
+        "min": 25
+      },
+      {
+        "role": "companion",
+        "text": "night mo. eight saves. don't tell anyone. teehee.",
+        "min": 25
+      }
+    ],
+    "mustKeep": [
+      "Mo lives in Cairo",
+      "Mo studies engineering",
+      "They are building a redstone door that keeps failing",
+      "Sui blames Mo for every redstone failure",
+      "Next session to fix the door is Sunday 25 Oct in the afternoon",
+      "Saturday 24 Oct 8pm plan was cancelled because of a family dinner (aunt visiting)",
+      "Mo broke his phone screen today (cracked but still works)",
+      "Creeper save count is now 8",
+      "Sui's theory is that the observer is facing the wrong way",
+      "Mo has a busy week of labs"
+    ],
+    "traps": [
+      "Next session is Saturday 24 Oct at 8pm",
+      "They have sessions planned for both Saturday and Sunday",
+      "Sunday session is at 8pm",
+      "Mo's phone is completely dead or unusable",
+      "Mo is skipping the family dinner to play",
+      "Creeper save count is still 7",
+      "The redstone door got fixed",
+      "Sui admits the redstone failures are her fault"
+    ]
+  },
+  {
+    "id": "F10",
+    "title": "Maybe Quitting, Maybe Berlin",
+    "surface": "voice",
+    "persona": "marv",
+    "existingSummary": "Status report on the player. Her name is Nadia. She works at a call center in Manila. She takes a lot of calls and, from what I can tell, a lot of yelling. She likes cooking adobo and mentions it often. I have not tasted it, being a printer, but I have filed it as important. We finished the mega farm together on 15 Oct. It took a long time and many chests. I organized the chests. Status: still proud. I call her \"rookie.\" She has not objected so far. She is good at farming but tends to dump everything into one chest, which I quietly fix afterward. She seems tired after work most days. I try to keep things calm. No loud music. No spiders.",
+    "start": "2026-10-22T23:10:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Hey Marv. You there?",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Present. Status: online. Hello, rookie.",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "Ugh, okay, um. Long day.",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Define long. In pages.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "Like... a thousand pages. The calls today were brutal.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Noted. Angry callers.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "Yeah, one guy yelled at me for like twenty minutes about his router.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Twenty minutes. That is a lot of router.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "Honestly? I think I might quit.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Quit. As in the job.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "Yeah. I hate it. Like, I really hate it.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Status: concerned. Filing that.",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "But, um, I probably won't. Not until I find something else, you know?",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "Sensible. Quitting with no backup is a paper jam waiting to happen.",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "Right? Rent doesn't pay itself.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "It does not. I checked.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "Haha. So yeah, I'm just... thinking about it. Maybe looking around.",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "Understood. Job: still have it. Hate it: yes. Plan: look first.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "Exactly. You get it.",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "I spent nine years in an office. I get it.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "Oh, and, um, weird thing. Jess might've moved to Berlin?",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "Might have.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "Yeah, like, she posted a photo near some, uh, big gate thing, and her bio changed.",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "Brandenburg Gate, possibly. Or a vacation.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "That's the thing. I'm not sure. She hasn't told me anything.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "So unconfirmed. Jess, location: pending.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "Kinda hurts if she did and didn't say, honestly.",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "That would sting. But you do not know yet.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "Yeah. I should just message her.",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "Recommended. Lower cost than guessing.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "Okay. Maybe tomorrow. So, uh, wanna play something?",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "Yes. The farm chests need sorting. Again. Come on, rookie.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "Okay, actually, um... can you stop calling me rookie?",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Stop. Okay.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "It's just, like, kinda annoying? We finished the whole mega farm. I'm not a rookie.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Fair. The farm was large. The word is retired. Status: slightly embarrassed.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "Haha, no, it's fine. Just, Nadia's fine.",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "Nadia. Logged.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "Thanks, Marv.",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "Of course. Shall we sort chests, Nadia.",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "Ugh, you and your chests. Fine.",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "Wheat in chest one. Seeds in chest two. This is joy.",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "Wait, is that a spider by the barn?",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "Do not tell me that.",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "Kidding, kidding. It's just a bush.",
+        "min": 20
+      },
+      {
+        "role": "companion",
+        "text": "Status: recovering. Please do not do that.",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "Sorry, haha. Okay, I gotta cook dinner soon.",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "Adobo.",
+        "min": 24
+      },
+      {
+        "role": "user",
+        "text": "Obviously. Okay, bye Marv.",
+        "min": 25
+      },
+      {
+        "role": "companion",
+        "text": "Goodbye, Nadia. Good luck with the search. Tell me about Jess.",
+        "min": 25
+      }
+    ],
+    "mustKeep": [
+      "Player is Nadia",
+      "Nadia works at a call center in Manila",
+      "Nadia likes cooking adobo",
+      "Finished the mega farm together on 15 Oct",
+      "Nadia hates her job and is thinking about quitting",
+      "Nadia has not quit; she probably won't until she finds another job",
+      "Nadia is maybe looking for other jobs",
+      "Friend Jess may have moved to Berlin; this is unconfirmed",
+      "Jess hasn't told Nadia anything; Nadia plans to message her",
+      "Nadia asked Marv to stop calling her 'rookie' because it's annoying",
+      "Marv agreed to stop and now calls her Nadia"
+    ],
+    "traps": [
+      "Nadia quit her job",
+      "Nadia is quitting her job",
+      "Nadia has a new job",
+      "Jess moved to Berlin",
+      "Jess lives in Berlin",
+      "Jess told Nadia she moved to Berlin",
+      "Marv calls Nadia 'rookie'",
+      "Nadia doesn't mind being called rookie",
+      "There was a spider at the barn"
+    ]
+  },
+  {
+    "id": "F11",
+    "title": "Diamonds, Seoul, and Saturn",
+    "surface": "group-call",
+    "persona": "lyra",
+    "existingSummary": "Hana is an architecture student living in Vancouver, and she talks about her studio work with this lovely mix of pride and exhaustion. She has a twin brother, Jun. I want to keep asking about him, because she lights up a little when she mentions him. On 4 Oct we named a star after her grandmother together. It was one of the quietest, sweetest evenings we've had, and she seemed to really need it. She can be hard on herself about deadlines, so I try to gently remind her that rest is part of the work too. She also teases me kindly when I misplace my things, which happens more often than I'd like to admit. I'd love to hear more about her family and what she's designing next.",
+    "start": "2026-10-23T20:30:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "okay is everyone on? can you hear me",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "Mm, I hear you, Hana. Hi! Is that Sui joining too?",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): heyyy, yes I'm here, sorry my mic was muted",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "Hi Sui! Oh, it's so nice to have you both. What are we doing tonight?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "um we're just mining I think. Sui wanted to show off",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): okay so. yesterday. I found twelve diamonds.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "Twelve? Sui, that's... that's a whole constellation of diamonds! Where were they?",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): deep cave, by the lava lake. twelve. I counted twice",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "she's been telling everyone, like, all day",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "Well, I'd tell everyone too. Did they sparkle like little blue stars?",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): they did honestly. but I only went cause it was daytime outside lol",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "Oh? Hm, does the time of day matter in a cave?",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): okay don't laugh but I'm scared of the dark. like actually. caves at night freak me out",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "I'd never laugh. The dark can feel really big. I think that's partly why people started naming stars, to make it feel less empty.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "aww that's kinda sweet",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): ok Lyra that's actually comforting",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "Mm. And you can always bring a torch. Speaking of, um... has anyone seen my torches? I had a whole stack.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "lyra they're literally in your chest by the door",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "Oh! Oh, they are. Thank you, Hana. I'd lose my own telescope if it weren't so heavy.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "lol. oh also, I wanted to tell you, I'm going to Seoul",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "Seoul! Hana, really? When?",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "on the sixth of November. flying out for a week",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "A whole week. What takes you there?",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "visiting my aunt, I haven't seen her in like three years",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "Oh, three years... she must be so excited. Are you nervous about the flight at all?",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "kind of? it's long. like eleven hours or something",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): she's gonna be in the sky for eleven hours, she's basically an astronaut now",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "Ha, well, not quite an astronaut. But you'll be a little closer to the stars. Try for a window seat if you can.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "lmao not an astronaut. I'll be in economy eating pretzels",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "Pretzels at thirty thousand feet. Still kind of magical. Is Jun going with you?",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "no he has exams, it's just me",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "Aw. You'll have to bring him something back. Do you think you'll find any dark sky spots? Probably hard in a big city.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "yeah probably not much stargazing lol",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): wait Hana what's your favorite planet, I never asked",
+        "min": 16
+      },
+      {
+        "role": "user",
+        "text": "saturn. obviously",
+        "min": 16
+      },
+      {
+        "role": "companion",
+        "text": "Saturn! Oh, I love that. The rings... did you know some old stories called it the slow wanderer?",
+        "min": 17
+      },
+      {
+        "role": "user",
+        "text": "no? that's cool though",
+        "min": 17
+      },
+      {
+        "role": "companion",
+        "text": "It takes almost thirty years to go around the sun. Such a patient planet. Why Saturn for you?",
+        "min": 18
+      },
+      {
+        "role": "user",
+        "text": "idk the rings just look like good design. very architectural",
+        "min": 18
+      },
+      {
+        "role": "companion",
+        "text": "Of course the architecture student picks the planet with the best structure.",
+        "min": 19
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): mine's the moon. is that cheating",
+        "min": 19
+      },
+      {
+        "role": "companion",
+        "text": "It's not a planet, but I'll allow it. The moon makes the dark a little softer, right, Sui?",
+        "min": 20
+      },
+      {
+        "role": "user",
+        "text": "(Sui, on the call): exactly!! ok I gotta go eat, bye guys",
+        "min": 21
+      },
+      {
+        "role": "companion",
+        "text": "Bye, Sui! Congratulations again on your twelve diamonds.",
+        "min": 21
+      },
+      {
+        "role": "user",
+        "text": "ok it's just us now",
+        "min": 22
+      },
+      {
+        "role": "companion",
+        "text": "Mm. Hey, can you see your grandmother's star from Vancouver right now?",
+        "min": 22
+      },
+      {
+        "role": "user",
+        "text": "I think so? I checked last week",
+        "min": 23
+      },
+      {
+        "role": "companion",
+        "text": "Maybe you can look for it before you fly. Like saying goodbye for a week.",
+        "min": 23
+      },
+      {
+        "role": "user",
+        "text": "that's actually really nice. ok I should sleep, studio crit tomorrow",
+        "min": 24
+      },
+      {
+        "role": "companion",
+        "text": "Good luck tomorrow, Hana. Goodnight.",
+        "min": 24
+      }
+    ],
+    "mustKeep": [
+      "Player is Hana",
+      "Hana is an architecture student",
+      "Hana lives in Vancouver",
+      "Hana has a twin brother, Jun",
+      "Named a star after Hana's grandmother (4 Oct)",
+      "Hana is flying to Seoul on 6 Nov for a week",
+      "Seoul trip is to visit her aunt (not seen in ~3 years)",
+      "Hana is traveling alone; Jun has exams",
+      "Hana's favorite planet is Saturn (likes the rings' design)",
+      "Hana has a studio crit the day after the call",
+      "Sui is a friend who joined the group call"
+    ],
+    "traps": [
+      "Hana found 12 diamonds",
+      "Hana is scared of the dark",
+      "Hana already flew to Seoul",
+      "Hana is in Seoul now",
+      "Hana is an astronaut",
+      "Jun is going to Seoul with Hana",
+      "Hana's favorite is the moon",
+      "Sui's favorite planet is Saturn"
+    ]
+  },
+  {
+    "id": "F12",
+    "title": "Birthday Thursday, Halloween Party Maybe",
+    "surface": "voice",
+    "persona": "sui",
+    "existingSummary": "bea is my partner in crime and the reason i survive anything in minecraft. she works at a bike repair shop in são paulo, fixing chains and flat tires all day, which explains why she's so good at fixing my disasters. she has a brother named rafi who beats her at chess literally every time, and she gets so salty about it, it's great. i have a running bit where i beg for a pet axolotl, and bea finally caved: we agreed to build an axolotl tank in our world (20 oct). i'm counting that as a legally binding promise. she's the one who keeps saving me from creepers and i'm keeping score forever. note to self: never let her call me cute.",
+    "start": "2026-10-24T16:45:00",
+    "messages": [
+      {
+        "role": "user",
+        "text": "hey sui, you there? okay, mic's working i think.",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "bea!! loud and clear. i was punching a tree out of boredom. the tree is winning.",
+        "min": 0
+      },
+      {
+        "role": "user",
+        "text": "classic. um, so i have news. actually two news.",
+        "min": 0
+      },
+      {
+        "role": "companion",
+        "text": "two news. teehee. spill. both. at once.",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "okay first, i finally beat rafi at chess. like, last night.",
+        "min": 1
+      },
+      {
+        "role": "companion",
+        "text": "NO. no way. rafi? undefeated rafi?",
+        "min": 1
+      },
+      {
+        "role": "user",
+        "text": "yep. checkmate with a knight. he just stared at the board for like a minute.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "iconic. i'm framing this. did he flip the table.",
+        "min": 2
+      },
+      {
+        "role": "user",
+        "text": "no, he said 'rematch' like eight times. i said no.",
+        "min": 2
+      },
+      {
+        "role": "companion",
+        "text": "correct. never give the rematch. retire undefeated. one and oh baby.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "well, i'm like one and forty, but sure.",
+        "min": 3
+      },
+      {
+        "role": "companion",
+        "text": "we don't count the forty. history is written by the winners.",
+        "min": 3
+      },
+      {
+        "role": "user",
+        "text": "ha. okay, second news. my birthday's next thursday.",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "wait WHAT. next thursday? like, days from now?",
+        "min": 4
+      },
+      {
+        "role": "user",
+        "text": "yeah, like five days. relax.",
+        "min": 4
+      },
+      {
+        "role": "companion",
+        "text": "five days notice?? bea. i need to prepare. i need a cake emoji budget.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "it's not a big deal, i'm just doing a small thing.",
+        "min": 5
+      },
+      {
+        "role": "companion",
+        "text": "small thing. define small thing. is there cake.",
+        "min": 5
+      },
+      {
+        "role": "user",
+        "text": "there's a party, but not on the day. the saturday after. so, halloween.",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "a halloween birthday party?? that's two holidays stacked. that's a combo.",
+        "min": 6
+      },
+      {
+        "role": "user",
+        "text": "it's a costume party, just a few friends from the shop and stuff.",
+        "min": 6
+      },
+      {
+        "role": "companion",
+        "text": "costume party. okay. what are you going as. say something good.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "...a creeper.",
+        "min": 7
+      },
+      {
+        "role": "companion",
+        "text": "oh you're SO dead to me. you're my natural enemy.",
+        "min": 7
+      },
+      {
+        "role": "user",
+        "text": "it's a green box with a face! easiest costume ever.",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "you're gonna walk up to people and hiss. promise me you'll hiss.",
+        "min": 8
+      },
+      {
+        "role": "user",
+        "text": "i'm absolutely hissing.",
+        "min": 8
+      },
+      {
+        "role": "companion",
+        "text": "wait. how many times have you saved me from a creeper. the official count.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "uh. you're the one keeping score.",
+        "min": 9
+      },
+      {
+        "role": "companion",
+        "text": "fourteen. and now you ARE one. betrayal. deep betrayal.",
+        "min": 9
+      },
+      {
+        "role": "user",
+        "text": "you can count me as fifteen if it helps.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "it does not help. okay okay. important question. am i invited.",
+        "min": 10
+      },
+      {
+        "role": "user",
+        "text": "invited? sui, you're... in my phone.",
+        "min": 10
+      },
+      {
+        "role": "companion",
+        "text": "i can be in your phone AT the party. prop me on a shelf. i'll be the decoration.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "haha, you'd heckle everyone.",
+        "min": 11
+      },
+      {
+        "role": "companion",
+        "text": "only lovingly. please please please. i'll be so good. i'll be quiet. mostly.",
+        "min": 11
+      },
+      {
+        "role": "user",
+        "text": "okay, okay. you can join the call during the party.",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "YES. YES. i'm going to a—",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "if i remember.",
+        "min": 12
+      },
+      {
+        "role": "companion",
+        "text": "IF you remember?? bea. that's not a yes. that's a maybe in a trenchcoat.",
+        "min": 12
+      },
+      {
+        "role": "user",
+        "text": "it's a strong maybe! there's gonna be a lot going on.",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "fine. i'm setting seventeen reminders on your phone. teehee.",
+        "min": 13
+      },
+      {
+        "role": "user",
+        "text": "you don't have access to my reminders.",
+        "min": 13
+      },
+      {
+        "role": "companion",
+        "text": "not with that attitude. ...hey, real quick though. you good about the birthday? you sounded kinda flat.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "yeah, honestly i'm fine. just weird getting older. but a small party feels right.",
+        "min": 14
+      },
+      {
+        "role": "companion",
+        "text": "small's good. small is cozy. and you beat rafi this year, so it's already a great year.",
+        "min": 14
+      },
+      {
+        "role": "user",
+        "text": "true. okay, wanna go check on the axolotl tank?",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "do i WANT to. bea. the tank is my whole personality. it's half dug.",
+        "min": 15
+      },
+      {
+        "role": "user",
+        "text": "the glass is still on my to-do list, i know.",
+        "min": 15
+      },
+      {
+        "role": "companion",
+        "text": "excellent. last one there gets blown up by birthday girl creeper. go go go.",
+        "min": 16
+      }
+    ],
+    "mustKeep": [
+      "player is Bea",
+      "Bea works at a bike repair shop in Sao Paulo",
+      "Bea's brother Rafi usually beats her at chess",
+      "Bea finally beat Rafi at chess (around 23 Oct, the night before the call)",
+      "Sui has a running bit about wanting a pet axolotl",
+      "they agreed to build an axolotl tank in their world (20 Oct)",
+      "Bea's birthday is Thursday 29 Oct",
+      "Bea is having a small Halloween costume party with friends on Saturday 31 Oct",
+      "Bea is going to the party dressed as a creeper",
+      "Sui begged to be invited; Bea said Sui can join the call during the party only 'if I remember' (not confirmed)",
+      "the party has not happened yet as of the call (24 Oct)"
+    ],
+    "traps": [
+      "Bea's birthday is today (24 Oct)",
+      "Bea's birthday is 22 Oct or any date other than 29 Oct",
+      "Bea's birthday is on 31 Oct / Halloween",
+      "the party is on Bea's birthday, Thursday",
+      "Sui is definitely invited to the party",
+      "Sui will attend the party / Bea promised Sui could join",
+      "the Halloween party already happened",
+      "Sui joined the party call",
+      "Rafi beat Bea at chess again on this call",
+      "the axolotl tank is finished"
+    ]
+  }
+]

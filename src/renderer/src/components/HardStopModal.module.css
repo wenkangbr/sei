@@ -1,0 +1,28 @@
+/* HardStopModal (PROXY-06) — Party redesign.
+   The scrim, panel, title, footer + animations are owned by ModalShell now;
+   only the body copy style remains here. */
+
+.body {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+/* 260926: the "Free play resets in N days (...)" line, set apart from the
+   body so the answer to "when can I play again" is the thing you read. */
+.resetLine {
+  margin-top: 10px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 261023: Top up | Upgrade, full width under the copy. Upgrade gets the
+   wider column. */
+.ctas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}

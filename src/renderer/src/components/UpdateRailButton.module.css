@@ -1,0 +1,168 @@
+/* UpdateRailButton: full-bleed "Update Sei" block at the foot of the rail
+ * (261023). Colors come from theme tokens only: a --green to --accent-strong
+ * sweep with --accent-text on top, so every theme gets its own pairing.
+ * Sharp corners like every other control (D-28). */
+
+.update {
+  position: relative;
+  align-self: stretch;
+  flex-shrink: 0;
+  /* Flush with the rail's bottom edge (cancel .rail's 14px bottom padding)
+     and over its 1px right border, so no rail-colored seam shows. */
+  margin: var(--space-sm) -1px -14px 0;
+  min-height: 64px;
+  padding: var(--space-sm) var(--space-xs) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  border: none;
+  border-radius: 0;
+  background: linear-gradient(160deg, var(--green), var(--accent-strong));
+  color: var(--accent-text);
+  font-family: var(--sans);
+  cursor: pointer;
+  overflow: hidden;
+  isolation: isolate;
+  transition: filter 0.2s ease;
+}
+
+/* Mint's rail is itself green, so the default sweep would sit green on green.
+ * Deepen the far end toward the theme's own text color for separation. */
+:root[data-theme='mint'] .update {
+  background: linear-gradient(160deg, var(--green), color-mix(in srgb, var(--accent-strong) 55%, var(--text)));
+}
+
+/* A slow sheen every few seconds: enough motion to be noticed at the edge of
+ * the eye, never a blink. */
+.update::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--accent-text) 22%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-110%);
+  animation: update-sheen 5.5s var(--ease) 1.2s infinite;
+  pointer-events: none;
+}
+
+.update:hover {
+  filter: brightness(1.08) saturate(1.05);
+}
+
+.update:hover .icon {
+  transform: rotate(180deg);
+}
+
+.update:active {
+  filter: brightness(0.96);
+}
+
+.update:focus-visible {
+  outline: 2px solid var(--rail-accent);
+  outline-offset: -4px;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  transition: transform 0.45s var(--ease-pop);
+}
+
+.label {
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-align: center;
+  /* "Update Sei" fits on one line in the 74px rail; longer translations wrap
+     to a second line instead of clipping. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.restarting {
+  cursor: default;
+}
+
+.restarting::after {
+  animation: none;
+}
+
+.restarting .icon {
+  animation: update-spin 1s linear infinite;
+}
+
+/* ── Downloading: calm, no click target ──────────────────────────────── */
+.downloading {
+  align-self: stretch;
+  flex-shrink: 0;
+  margin-top: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.downloadingLabel {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--rail-fg);
+  text-transform: uppercase;
+}
+
+.track {
+  display: block;
+  width: 100%;
+  height: 3px;
+  background: var(--rail-border);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  background: var(--rail-fg-strong);
+  transition: width 0.4s var(--ease);
+}
+
+.confirmBody {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+@keyframes update-sheen {
+  0% {
+    transform: translateX(-110%);
+  }
+  30%,
+  100% {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update::after,
+  .restarting .icon {
+    animation: none;
+  }
+  .update:hover .icon {
+    transform: none;
+  }
+}

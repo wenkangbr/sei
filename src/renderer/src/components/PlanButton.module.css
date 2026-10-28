@@ -1,0 +1,182 @@
+/* PlanButton (261023): the buy / upgrade target on the plan surfaces.
+ *
+ * Tokens only. The fill is the theme's own accent with a lighter top edge
+ * (color-mix with white), so it follows every theme (ice, midnight, acorn,
+ * mint) instead of carrying a second palette. Sharp corners (D-28).
+ */
+
+.button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: 0 var(--space-md-plus);
+  border-radius: 0;
+  border: 1px solid transparent;
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  /* Keep a long translated label on one line inside narrow cards; it ends in
+     an ellipsis rather than pushing the card wider. */
+  white-space: nowrap;
+  min-width: 0;
+  transition:
+    transform 140ms var(--ease-pop),
+    box-shadow 180ms var(--ease),
+    background-color 180ms var(--ease),
+    border-color 180ms var(--ease),
+    color 180ms var(--ease),
+    filter 180ms var(--ease);
+}
+
+.md {
+  min-height: 44px;
+  font-size: 15px;
+}
+
+.lg {
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon,
+.arrow {
+  flex: none;
+  display: inline-flex;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+}
+
+/* ── primary: the one loud button per card ─────────────────────────── */
+.primary {
+  color: var(--accent-text);
+  background-color: var(--accent);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 78%, white) 0%,
+    var(--accent) 55%,
+    var(--accent-strong) 100%
+  );
+  border-color: var(--accent-strong);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 38%, transparent),
+    0 6px 16px -8px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+
+/* The shine: a soft diagonal highlight parked off the left edge, swept across
+   on hover. Behind the label (z-index -1 inside the isolated button). */
+.primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, white 42%, transparent) 50%,
+    transparent 70%
+  );
+  transform: translateX(-110%);
+  pointer-events: none;
+}
+
+.primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06) saturate(1.05);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 45%, transparent),
+    0 10px 22px -10px color-mix(in srgb, var(--accent) 95%, transparent);
+}
+
+.primary:hover:not(:disabled)::after {
+  transform: translateX(110%);
+  transition: transform 650ms var(--ease);
+}
+
+.primary:hover:not(:disabled) .arrow {
+  transform: translateX(3px);
+}
+
+.arrow {
+  transition: transform 180ms var(--ease-pop);
+}
+
+/* Press: sink back down, darken a touch, shadow goes inside. */
+.primary:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+  filter: brightness(0.96);
+  box-shadow:
+    inset 0 2px 6px color-mix(in srgb, black 22%, transparent),
+    0 2px 6px -4px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* ── secondary: same size, quiet ───────────────────────────────────── */
+.secondary {
+  color: var(--text-2);
+  background: var(--bg2);
+  border-color: var(--border-strong);
+}
+
+.secondary:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.secondary:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+/* "Current plan" is a disabled secondary: a state, not a dead button, so it
+   stays readable (no dimming) and shows no hover. */
+.secondary:disabled {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .arrow {
+    transition:
+      background-color 180ms var(--ease),
+      border-color 180ms var(--ease),
+      color 180ms var(--ease),
+      filter 180ms var(--ease);
+  }
+  .primary:hover:not(:disabled),
+  .primary:active:not(:disabled),
+  .secondary:active:not(:disabled),
+  .primary:hover:not(:disabled) .arrow {
+    transform: none;
+  }
+  .primary::after {
+    display: none;
+  }
+}

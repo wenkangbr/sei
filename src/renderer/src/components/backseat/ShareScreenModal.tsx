@@ -1,0 +1,468 @@
+/**
+ * Share-screen picker (260728 as a games-picker panel, remade as a call modal
+ * 260803).
+ *
+ * WHERE THIS IS REACHED FROM is the whole change. Screen sharing used to be a
+ * tile in the "Play together" grid, which said it was a game and put it beside
+ * chess. It is not a game, it is the thing Discord does: you are already on a
+ * call, you press the share button in the call controls, you pick a window.
+ * So the tile is gone and this is a modal over the call.
+ *
+ * One decision is left, WHAT to share. The voice/text mode toggle went with the
+ * overlay window: sharing now requires a call, and on a call the companion
+ * talks.
+ *
+ * 260803: TWO entry points now. The call controls still open this with a call
+ * already running, and that path is unchanged: pick a window, press Share, the
+ * capture starts on the call you are on. The chat header's Backseat button
+ * opens the same picker COLD, with no call at all, and there "Share" has to
+ * produce both. It cannot do that inline (the voice module's install/consent
+ * gate can hold the dial for minutes, or refuse it), so it arms a pending share
+ * in useBackseatStore and routes into the call; CallMiniBar starts the capture
+ * when the call goes live. See the store's header for the arm's lifetime.
+ *
+ * The cold path navigates to the call view directly rather than going through
+ * startOrOpenCall. startOrOpenCall starts the call IN PLACE when a game surface
+ * is open, and the shared picture is drawn by VoiceCallScreen only, so an
+ * in-place start would leave the share running with nowhere to see it. This is
+ * the same reasoning callLaunch gives for not counting a share as a game
+ * surface.
+ *
+ * 260929: on macOS the picker checks Screen Recording before it lists
+ * anything, and when access is off it shows ScreenAccessGate in its place
+ * (why, Open Settings, a poll that comes back here on its own, and a restart
+ * offer). Windows lists straight away, as before.
+ *
+ * 261004: AUTO-SHARE. For a backseat game with `autoShare` (Roblox) there is
+ * no picker at all: once Screen Recording is fine, this hands the call an
+ * auto-share watch (useBackseatStore) that waits for the game's window and
+ * shares it by itself, and closes. The call view shows the waiting card. Its
+ * "share something else" reopens this with `manual`, which is the picker as
+ * it always was.
+ */
+
+import React, { useEffect, useRef, useState } from 'react';
+import { sei } from '../../lib/ipcClient';
+import { useBackseatStore } from '../../lib/stores/useBackseatStore';
+import { useUiStore } from '../../lib/stores/useUiStore';
+import { useVoiceStore } from '../../lib/stores/useVoiceStore';
+import { useDataStore } from '../../lib/stores/useDataStore';
+import { isGameSurfaceOpen } from '../../lib/callLaunch';
+import type { BackseatSource } from '../../../../shared/backseatIpc';
+import {
+  backseatGame,
+  pickHintedSource,
+  type BackseatGameSelection,
+} from '../../../../shared/backseatGames';
+import { ModalShell, ModalFooter } from '../ModalShell';
+import { Button } from '../Button';
+import { Toggle } from '../Toggle';
+import { InfoTip } from '../InfoTip';
+import { useT } from '../../lib/i18n';
+import { ScreenAccessGate, screenAccess } from '../permissions/ScreenAccessGate';
+import styles from './ShareScreenModal.module.css';
+
+export interface ShareScreenModalProps {
+  characterId: string;
+  /**
+   * 260929: set when the share came from a backseat game tile (Roblox). The
+   * game's own window is preselected when it is open, the picker keeps looking
+   * for it for a while when it is not, and the selection rides the share into
+   * main, which adds the game's knowledge to the prompt. Nothing else about
+   * the picker changes.
+   */
+  game?: BackseatGameSelection;
+  /** Screenshot harness only: open on the Screen Recording step. */
+  initialAccess?: 'blocked-ask' | 'blocked-waiting' | 'blocked-restart';
+  /** 261004: show the picker even for an auto-share game ("share something
+   *  else"). */
+  manual?: boolean;
+}
+
+/** While a game's window is not open yet, how often the picker looks again,
+ *  and for how long. The player is usually starting the game right now. */
+const HINT_POLL_MS = 3_000;
+const HINT_POLL_MAX_MS = 120_000;
+
+export function ShareScreenModal({
+  characterId,
+  game,
+  initialAccess,
+  manual,
+}: ShareScreenModalProps): React.ReactElement | null {
+  const t = useT();
+  const closeModal = useUiStore((s) => s.closeModal);
+  const navigate = useUiStore((s) => s.navigate);
+  const characters = useDataStore((s) => s.characters);
+  const companionName =
+    characters.find((c) => c.id === characterId)?.name ?? t('Your companion');
+
+  const share = useBackseatStore((s) => s.share);
+  const armPendingShare = useBackseatStore((s) => s.armPendingShare);
+  const starting = useBackseatStore((s) => s.starting);
+  const shareError = useBackseatStore((s) => s.error);
+
+  // "Is this companion on a call right now": membership, not status, so a call
+  // still ringing behaves exactly as it does today (the call controls' share
+  // button is live during 'connecting' too). An errored call is not a call.
+  const onCall = useVoiceStore(
+    (s) => s.participants.includes(characterId) && s.status !== 'error',
+  );
+
+  // macOS Screen Recording (260929): 'checking' until main has answered,
+  // 'blocked' shows ScreenAccessGate instead of the picker, 'ready' lists.
+  const [access, setAccess] = useState<'checking' | 'blocked' | 'ready'>(
+    initialAccess ? 'blocked' : 'checking',
+  );
+  const [sources, setSources] = useState<BackseatSource[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const gameDef = backseatGame(game?.gameId);
+  const auto = !!(game && gameDef?.autoShare && !manual);
+  // Once the player picks something themselves the hint never overrides it.
+  const userPicked = useRef(false);
+  const [hintFound, setHintFound] = useState(false);
+  // Two tabs rather than two stacked sections (260804). The window list is as
+  // long as the player has windows open, so the one or two screens underneath
+  // it were below the fold and effectively hidden. Windows lead because they
+  // are the better share: one app, no notifications, no second monitor of
+  // nothing.
+  const [tab, setTab] = useState<'window' | 'screen'>('window');
+  // UserConfig.avatar_in_captures (260807). null until read, which keeps the
+  // switch from flicking off-then-on for someone who has it enabled.
+  const [inCaptures, setInCaptures] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const cfg = await sei.getConfig();
+        if (alive) setInCaptures(cfg.avatar_in_captures === true);
+      } catch {
+        if (alive) setInCaptures(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Optimistic, with rollback, over a read-modify-write of the freshest on-disk
+  // config — saveConfig replaces the whole object, so a cached copy would
+  // clobber whatever else changed since this modal opened (the 260725
+  // stale-wholesale-save hazard). Main applies it to the live overlay windows.
+  const toggleInCaptures = async (next: boolean): Promise<void> => {
+    const prev = inCaptures;
+    setInCaptures(next);
+    try {
+      const cfg = await sei.getConfig();
+      await sei.saveConfig({ ...cfg, avatar_in_captures: next });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[ShareScreenModal] saveConfig (avatar_in_captures) failed', err);
+      setInCaptures(prev);
+    }
+  };
+
+  useEffect(() => {
+    if (initialAccess) return;
+    let alive = true;
+    void screenAccess().then((ok) => {
+      if (alive) setAccess(ok ? 'ready' : 'blocked');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [initialAccess]);
+
+  // Auto-share: with access settled there is nothing to pick. Hand the call a
+  // watch for the game's window (armed for later when there is no call yet,
+  // the same way a picked share is) and get out of the way.
+  useEffect(() => {
+    if (!auto || !game || access !== 'ready') return;
+    handOffAutoShare(characterId, game, onCall);
+    // Runs once, when access settles; the props never change for a mounted modal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access]);
+
+  useEffect(() => {
+    if (access !== 'ready' || auto) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const openedAt = Date.now();
+    const load = async (): Promise<void> => {
+      try {
+        const list = await sei.backseatSources();
+        if (!alive) return;
+        setSources(list);
+        if (!gameDef) return;
+        const hit = pickHintedSource(list, gameDef.windowNames);
+        if (hit) {
+          setHintFound(true);
+          if (!userPicked.current) {
+            setTab('window');
+            setSelected(hit.id);
+          }
+          return;
+        }
+        // Not open yet: look again while the player has not picked anything
+        // else, bounded so a picker left open does not enumerate forever.
+        if (!userPicked.current && Date.now() - openedAt < HINT_POLL_MAX_MS) {
+          timer = setTimeout(() => void load(), HINT_POLL_MS);
+        }
+      } catch {
+        if (alive) {
+          setSources((prev) => prev ?? []);
+          setListError(t('Could not read your open windows. Check screen recording permission for Sei.'));
+        }
+      }
+    };
+    void load();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+    // t is stable per language and gameDef is derived from a prop that never
+    // changes for a mounted modal; the list (and the hint poll) runs once per
+    // grant, so it starts only after Screen Recording access is 'ready'.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access]);
+
+  const start = async (): Promise<void> => {
+    const source = sources?.find((s) => s.id === selected);
+    if (!source || starting) return;
+    if (!onCall) {
+      // Cold start: there is nothing to attach the capture to yet. Arm it and
+      // go dial. Closing first keeps the picker from sitting over the call
+      // view's install gate.
+      armPendingShare(characterId, source, game);
+      closeModal();
+      navigate({ kind: 'voice-call', characterId });
+      return;
+    }
+    // The store owns the failure message, so a refused start leaves this modal
+    // open with the reason on it rather than closing over a dead session.
+    if (!(await share(characterId, source, game))) return;
+    closeModal();
+    // A live call can be reached from three places, and only one of them can
+    // draw the shared picture. The rule is the same one callLaunch uses: go to
+    // the call view unless the player is somewhere the call already belongs.
+    //   - the fullscreen call controls: view is already 'voice-call', so this
+    //     is a no-op and that path is untouched;
+    //   - the docked in-game controls: a game surface is open, and yanking the
+    //     player out of their game to look at a preview would be wrong, so it
+    //     is a no-op there too;
+    //   - the chat header (the new entry point): nothing on the chat screen
+    //     renders the share, so without this the player pressed Share and
+    //     watched nothing happen.
+    const ui = useUiStore.getState();
+    if (ui.view.kind !== 'voice-call' && !isGameSurfaceOpen(characterId)) {
+      ui.navigate({ kind: 'voice-call', characterId });
+    }
+  };
+
+  const screens = (sources ?? []).filter((s) => s.kind === 'screen');
+  const windows = (sources ?? []).filter((s) => s.kind === 'window');
+  const shown = tab === 'window' ? windows : screens;
+  const error = listError ?? shareError;
+
+  // Switching tabs drops the selection: the Share button must never act on a
+  // source the player can no longer see.
+  const pickTab = (next: 'window' | 'screen'): void => {
+    if (next === tab) return;
+    userPicked.current = true;
+    setTab(next);
+    setSelected(null);
+  };
+
+  // Auto-share shows nothing of its own unless Screen Recording needs asking.
+  if (auto && access !== 'blocked') return null;
+
+  if (access === 'blocked') {
+    return (
+      <ModalShell
+        title={t('Show {name} your screen', { name: companionName })}
+        width={460}
+        onClose={() => {
+          void sei.permissionsClearResume().catch(() => {});
+          closeModal();
+        }}
+      >
+        <ScreenAccessGate
+          characterId={characterId}
+          game={game}
+          onGranted={() => setAccess('ready')}
+          onCancel={closeModal}
+          initialStage={
+            initialAccess === 'blocked-restart'
+              ? 'restart'
+              : initialAccess === 'blocked-waiting'
+                ? 'waiting'
+                : 'ask'
+          }
+        />
+      </ModalShell>
+    );
+  }
+
+  return (
+    <ModalShell
+      title={t('Show {name} your screen', { name: companionName })}
+      width={640}
+      scrimClose
+      onClose={closeModal}
+    >
+      <div className={styles.root}>
+        {/* The second sentence appears only when there is no call yet: telling
+            someone they are about to start a call they are already on is
+            noise. One paragraph, not two, because .root's flex gap would put a
+            full row between them. */}
+        <p className={styles.sub}>
+          {t('Sound is shared too, so {name} can hear it.', { name: companionName })}
+          {!onCall ? ` ${t('Sharing starts a voice call.')}` : ''}
+        </p>
+        {gameDef && !hintFound && sources !== null ? (
+          <p className={styles.sub}>
+            {t('Open {game} and its window will show up here.', { game: gameDef.name })}
+          </p>
+        ) : null}
+
+        <div className={styles.tabs} role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'window'}
+            className={`${styles.tab} ${tab === 'window' ? styles.tabOn : ''}`}
+            onClick={() => pickTab('window')}
+          >
+            {t('Window')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'screen'}
+            className={`${styles.tab} ${tab === 'screen' ? styles.tabOn : ''}`}
+            onClick={() => pickTab('screen')}
+          >
+            {t('Entire screen')}
+          </button>
+        </div>
+
+        <div className={styles.list}>
+          {sources === null ? (
+            <p className={styles.empty}>{t('Looking for what you have open...')}</p>
+          ) : shown.length === 0 ? (
+            <p className={styles.empty}>
+              {tab === 'window'
+                ? t('No windows open to share. Open something and come back.')
+                : t('No screens available to share.')}
+            </p>
+          ) : (
+            <div className={styles.grid}>
+              {shown.map((s) => (
+                <SourceTile
+                  key={s.id}
+                  source={s}
+                  selected={selected === s.id}
+                  onPick={() => {
+                    userPicked.current = true;
+                    setSelected(s.id);
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {error ? <p className={styles.error}>{error}</p> : null}
+
+        {/* The overlay windows set content protection, which is a per-window OS
+            flag that hides them from EVERY capture path at once. So this is one
+            switch, and turning it on means an entire-screen share can contain
+            the avatar too. Hence the default and the tip. */}
+        <div className={styles.option}>
+          <span className={styles.optionLabel}>
+            {t('Show avatar in screen recordings')}
+            <InfoTip
+              text={t('Keep this off unless you want to record the avatar.')}
+              label="About showing the avatar in screen recordings"
+            />
+          </span>
+          <Toggle
+            on={inCaptures === true}
+            disabled={inCaptures === null}
+            onChange={(next) => void toggleInCaptures(next)}
+            aria-label={t('Show avatar in screen recordings')}
+          />
+        </div>
+      </div>
+
+      <ModalFooter>
+        <Button kind="quiet" size="md" onClick={closeModal}>
+          {t('Cancel')}
+        </Button>
+        <Button size="md" onClick={() => void start()} disabled={!selected || starting}>
+          {starting ? t('Starting...') : t('Share')}
+        </Button>
+      </ModalFooter>
+    </ModalShell>
+  );
+}
+
+/**
+ * The auto-share hand-off (261004): close the picker and give the call a watch
+ * for the game's window. With no call yet the watch is armed like any cold
+ * share (a pending share with no source) and the player is taken to the call;
+ * on a call it starts now, and the player is taken to the call view unless
+ * they are on a game surface, by the same rule a picked share follows.
+ */
+export function handOffAutoShare(
+  characterId: string,
+  game: BackseatGameSelection,
+  onCall: boolean,
+): void {
+  const ui = useUiStore.getState();
+  ui.closeModal();
+  const bs = useBackseatStore.getState();
+  if (!onCall) {
+    bs.armPendingShare(characterId, null, game);
+    ui.navigate({ kind: 'voice-call', characterId });
+    return;
+  }
+  bs.startWatch(characterId, game);
+  const now = useUiStore.getState();
+  if (now.view.kind !== 'voice-call' && !isGameSurfaceOpen(characterId)) {
+    now.navigate({ kind: 'voice-call', characterId });
+  }
+}
+
+function SourceTile({
+  source,
+  selected,
+  onPick,
+}: {
+  source: BackseatSource;
+  selected: boolean;
+  onPick: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      className={`${styles.tile} ${selected ? styles.tileOn : ''}`}
+      aria-pressed={selected}
+      onClick={onPick}
+    >
+      <span className={styles.thumbWrap}>
+        {source.thumbnail ? (
+          <img className={styles.thumb} src={source.thumbnail} alt="" draggable={false} />
+        ) : (
+          <span className={styles.thumbBlank} />
+        )}
+      </span>
+      <span className={styles.tileName}>
+        {source.appIcon ? <img className={styles.appIcon} src={source.appIcon} alt="" /> : null}
+        <span className={styles.tileText}>{source.name}</span>
+      </span>
+    </button>
+  );
+}

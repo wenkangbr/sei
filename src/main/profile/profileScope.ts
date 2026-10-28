@@ -1,0 +1,284 @@
+/**
+ * Runtime profile-scope switching (260603 per-profile partitioning).
+ *
+ * The active profile scope (`paths.getActiveScope()`) decides which
+ * `<userData>/profiles/<scope>/…` bucket every per-account store reads/writes.
+ * At boot it is set from the persisted session (src/main/index.ts). This module
+ * re-points it when auth state changes AT RUNTIME — sign-in, sign-out, or
+ * swapping accounts — and drives the "start fresh like a new install" behavior:
+ *
+ *   1. End every live session of the OLD account (accountSessions.ts: chess,
+ *      Draw!, backseat, voice calls, chat sessions, every game bot), writing
+ *      their closing rows into the OLD scope before it moves (260926; this
+ *      used to stop only the bots).
+ *   2. Re-point the data scope at the new account's bucket.
+ *   3. Initialize a brand-new profile (mkdir + seed the bundled default
+ *      characters, idempotent per-profile) so a fresh account looks like a
+ *      fresh install rather than an empty void.
+ *   4. Push `app:scope-changed` so the renderer re-bootstraps (reload config +
+ *      characters, route to onboarding when the new profile has no
+ *      mc_username, else home).
+ *
+ * Wired by the Supabase auth-event subscription in src/main/auth/authState.ts.
+ */
+import type { BrowserWindow } from 'electron';
+import { mkdir } from 'node:fs/promises';
+import { paths, setActiveScope, getActiveScope, SCOPE_LOCAL } from '../paths';
+import { IpcChannel, type ScopeChangedEvent } from '../../shared/ipc';
+import type { BotSupervisorType } from '../botSupervisor';
+import { beginScopeSwitch, noteScopeChanged } from './scopeBarrier';
+
+let supervisorRef: BotSupervisorType | null = null;
+let getMainWindowRef: () => BrowserWindow | null = () => null;
+let endVoiceCallsRef: ((reason: string) => Promise<void>) | undefined;
+let teardownCeilingMs: number | undefined;
+let onScopeSwitchedRef: (() => void) | undefined;
+
+export function initProfileScope(deps: {
+  supervisor: BotSupervisorType;
+  getMainWindow: () => BrowserWindow | null;
+  /** Close open voice calls from main (index.ts owns the call row). */
+  endVoiceCalls?: (reason: string) => Promise<void>;
+  /** Bound on ending the old account's sessions (tests; default 10s). */
+  teardownCeilingMs?: number;
+  /**
+   * 261013 (T120): the new scope is live (after the renderer push). Runs the
+   * new account's pending app-quit "next time" checks. Fire and forget.
+   */
+  onScopeSwitched?: () => void;
+}): void {
+  supervisorRef = deps.supervisor;
+  getMainWindowRef = deps.getMainWindow;
+  endVoiceCallsRef = deps.endVoiceCalls;
+  teardownCeilingMs = deps.teardownCeilingMs;
+  onScopeSwitchedRef = deps.onScopeSwitched;
+}
+
+/**
+ * mkdir the active profile root. 260706: no longer seeds bundled defaults — a
+ * freshly-scoped profile (e.g. first sign-in on this machine) starts with zero
+ * local defaults, same as a fresh install. sui/lyra/clawd surface via the World
+ * tab and cache on demand from their public cloud rows; the user's own cloud
+ * characters are eagerly pulled by cacheMyCloudCharacters on the sign-in
+ * transition below.
+ */
+async function ensureProfileInitialized(): Promise<void> {
+  await mkdir(paths.profileRoot(), { recursive: true });
+}
+
+/**
+ * Switch the active profile scope to match the signed-in user (or `'local'`
+ * when signed out). No-op when the scope is unchanged (token refresh, the
+ * INITIAL_SESSION replay at boot — boot already set + seeded the scope).
+ */
+export function switchScopeForAuth(userId: string | null): Promise<void> {
+  // Serialized (260926). authState fires each switch detached, and one switch
+  // spends seconds ending sessions before it moves the scope, so a second
+  // auth event (sign-out, then straight into another sign-in) used to run
+  // alongside it: both read the same "previous" scope, and whichever set the
+  // scope LAST won, not the one requested last (the overlap test in
+  // profileScope.endSessions.test.ts fails without the chain). Each switch now waits
+  // for the one before it and reads the scope it starts from only then.
+  // The pending flag goes up at once, so session starts are refused from the
+  // moment the auth event lands (scopeBarrier.beginSessionStart).
+  const release = beginScopeSwitch();
+  const run = switchChain.then(() => runScopeSwitch(userId)).finally(release);
+  switchChain = run.catch(() => {});
+  return run;
+}
+
+let switchChain: Promise<void> = Promise.resolve();
+
+async function runScopeSwitch(userId: string | null): Promise<void> {
+  const prevScope = getActiveScope();
+  const nextScope = userId ?? SCOPE_LOCAL;
+  if (prevScope === nextScope) return;
+
+  const reason: ScopeChangedEvent['reason'] =
+    prevScope === SCOPE_LOCAL ? 'sign-in' : nextScope === SCOPE_LOCAL ? 'sign-out' : 'switch';
+
+  // 1. End every live session of the outgoing account before the scope moves
+  //    out from under it (260926: chess, Draw!, backseat, calls, chat
+  //    sessions and every game bot, not only the bots). Their `_ended` events
+  //    and play rows are written HERE, while the scope still points at the old
+  //    account. On sign-out authHandlers already stopped the bots (D-09);
+  //    every end is a no-op when nothing is live.
+  try {
+    const { endAccountSessions } = await import('./accountSessions');
+    await endAccountSessions({
+      supervisor: supervisorRef,
+      endVoiceCalls: endVoiceCallsRef,
+      ...(teardownCeilingMs !== undefined ? { ceilingMs: teardownCeilingMs } : {}),
+      notifyRenderer: () => {
+        const win = getMainWindowRef();
+        if (win && !win.isDestroyed()) win.webContents.send(IpcChannel.app.scopeEnding);
+      },
+    });
+  } catch (err) {
+    console.warn(`[sei] profileScope: ending the old account's sessions failed: ${(err as Error).message}`);
+  }
+
+  // 2. Re-point every profile-scoped path at the new account's bucket.
+  setActiveScope(nextScope);
+  noteScopeChanged();
+  console.log(`[sei] profileScope: ${prevScope} → ${nextScope} (${reason})`);
+
+  // 3. Initialize a brand-new profile (returning accounts / 'local' no-op here).
+  await ensureProfileInitialized();
+
+  // 3.5 Cross-device hydration (item 4). On sign-in to an existing account from
+  //     a fresh device, the local profile is empty even though the account has
+  //     state in the cloud. Pull it down HERE — before the scope-changed push
+  //     below — so the renderer's re-bootstrap (reload config + characters) sees
+  //     it and doesn't re-prompt onboarding or hide the user's own characters.
+  //     Skipped for sign-out (nextScope === local). Best-effort: a network blip
+  //     just defers hydration to the normal cache-on-demand path.
+  if (nextScope !== SCOPE_LOCAL) {
+    // (a0) Default the freshly-scoped account to cloud billing BEFORE the
+    //      scope-changed push below. The push triggers the renderer's
+    //      re-bootstrap (reload config + credits); the prior cloud-default
+    //      write lived in authState.ts AFTER switchScopeForAuth returned —
+    //      i.e. after this push had already fired — so a fresh sign-in
+    //      re-bootstrapped while config.json still held the 'local' default
+    //      and the user landed on API/BYOK mode. Writing it here, inside the
+    //      switch and before the push, closes that race. Idempotent: a later
+    //      in-session switch to BYOK persists, and a session-restore reopen
+    //      hits the same scope so this function early-returns (no re-flip).
+    //      260703: routed through applyCloudDefaultForSignIn so a profile that
+    //      EXPLICITLY chose BYOK (ai_backend_kind_source === 'user', or a
+    //      legacy 'local' with a stored key) keeps its choice across
+    //      sign-out/sign-in — the raw setAiBackendKind('cloud-proxy') here
+    //      used to stomp it on every re-login.
+    try {
+      const { applyCloudDefaultForSignIn } = await import('../apiKeyStore');
+      await applyCloudDefaultForSignIn();
+    } catch (err) {
+      console.warn(`[sei] profileScope: cloud-billing default failed: ${(err as Error).message}`);
+    }
+    // (a) Display name: backfill local config from public.profiles when this
+    //     device has no name yet, so onboarding doesn't re-ask for a name the
+    //     account already set elsewhere.
+    try {
+      const { loadConfig, updateConfig } = await import('../configStore');
+      const cfg = await loadConfig();
+      if (!(cfg.preferred_name ?? '').trim()) {
+        const { fetchMyProfileName } = await import('../cloud/cloudCharacterClient');
+        const cloudName = await fetchMyProfileName();
+        if (cloudName) {
+          await updateConfig((cur) =>
+            (cur.preferred_name ?? '').trim() ? cur : { ...cur, preferred_name: cloudName },
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(`[sei] profileScope: cloud name backfill failed: ${(err as Error).message}`);
+    }
+    // (a2) Heal legacy pre-0.4 default seeds in THIS profile. The boot-time
+    //      defaults→World migration (src/main/index.ts step 1b-1) runs ONCE
+    //      against the boot scope. On a session-restore launch getSession() is
+    //      empty that early, so the boot scope resolves to 'local' and only the
+    //      local profile is converted; the signed-in profile (scoped here, AFTER
+    //      the auth event re-points it) is never touched. Such a profile keeps
+    //      its old is_default:true copies of Sui/Marv/Lyra, which stay hidden on
+    //      Home (the is_default filter needs added_default_ids) and show no
+    //      public id in World. Re-run the conversion here so an upgrading cloud
+    //      user's copies flip to the owned/public World shape on sign-in; the
+    //      cacheMyCloudCharacters pull below (and refreshFromCloud on next open)
+    //      then pull the authoritative persona/portrait/skin from the cloud row.
+    //      Idempotent/state-gated: a no-op once healed and on a fresh profile
+    //      with no local defaults. Runs BEFORE cacheMyCloudCharacters so the
+    //      cloud pull sees the now-owned (no longer is_default) rows.
+    try {
+      const { runDefaultsToWorldMigration } = await import('../migration');
+      await runDefaultsToWorldMigration();
+    } catch (err) {
+      console.warn(`[sei] profileScope: default-seed heal failed: ${(err as Error).message}`);
+    }
+    // (b) Own characters: eagerly cache the account's cloud characters into the
+    //     local library so they appear in the IconRail immediately (not only
+    //     after being opened from the World/Summons list).
+    try {
+      const { cacheMyCloudCharacters } = await import('../cloud/cacheOnDemand');
+      await cacheMyCloudCharacters(nextScope);
+    } catch (err) {
+      console.warn(`[sei] profileScope: own-character hydration failed: ${(err as Error).message}`);
+    }
+    // (c) Per-DEVICE skin-setup gating. Skin setup installs a Minecraft mod on
+    //     THIS machine, so it must be prompted per device, not per account. An
+    //     existing account signing in on a NEW device gets its name backfilled
+    //     above (so onboarding — which normally arms skin_setup_pending — is
+    //     skipped) and would otherwise sail straight to home, leaving this
+    //     device's Minecraft unconfigured. If the account is onboarded but this
+    //     device has never COMPLETED the wizard, re-arm the pending flag here
+    //     (before the scope-changed push) so the routing resumes the skin-setup
+    //     step. hasRunOnce lives in the app-level skin-setup-state.json (NOT
+    //     profile-scoped), so a second account on a device that already ran
+    //     setup is correctly NOT re-prompted.
+    try {
+      const { loadWizardState } = await import('../wizardStateStore');
+      const wiz = await loadWizardState();
+      if (!wiz.hasRunOnce) {
+        const { loadConfig, updateConfig } = await import('../configStore');
+        const cfg = await loadConfig();
+        if ((cfg.preferred_name ?? '').trim() && cfg.skin_setup_pending !== true) {
+          await updateConfig((cur) => ({ ...cur, skin_setup_pending: true }));
+        }
+      }
+    } catch (err) {
+      console.warn(`[sei] profileScope: per-device skin-setup gate failed: ${(err as Error).message}`);
+    }
+  }
+
+  // 3.9 (260725) Broadcast the new scope's EFFECTIVE backend kind. A scope
+  //     switch changes the kind the spend paths will read without any config
+  //     write firing apiKeyStore's change listeners, so the renderer's mode
+  //     display (which starts UNKNOWN and only trusts main's reports) must be
+  //     told explicitly. Emitted BEFORE the scope-changed push so the mode is
+  //     already correct when the renderer re-bootstraps.
+  try {
+    const { getAiBackendKind } = await import('../apiKeyStore');
+    const { emitAiBackendKindChanged } = await import('../ipc');
+    emitAiBackendKindChanged(await getAiBackendKind());
+  } catch (err) {
+    console.warn(`[sei] profileScope: backend-kind broadcast failed: ${(err as Error).message}`);
+  }
+  // 261005: the analytics `backend` property reads 'unset' until the ACTIVE
+  // profile has a name, and the scope just moved. Fire-and-forget.
+  void import('../analytics').then((a) => a.refreshProfileOnboarded()).catch(() => {});
+
+  // 3.95 Same reasoning for the llm:capability mirror: the scope switch moves
+  //      the ACTIVE config (and with it the vision verdict) without any
+  //      config write firing apiKeyStore's change listeners, so the renderer
+  //      would keep the previous profile's verdict. Measured 260908: a local
+  //      profile on a text-only BYOK provider (deepseek) seeded 'no' at boot,
+  //      and signing in to a cloud account left backseat greyed out even
+  //      though cloud is always vision-capable.
+  try {
+    const { pushLlmCapability } = await import('../llm/capability');
+    await pushLlmCapability();
+  } catch (err) {
+    console.warn(`[sei] profileScope: llm-capability push failed: ${(err as Error).message}`);
+  }
+
+  // 4. Tell the renderer to re-bootstrap onto the new profile.
+  const win = getMainWindowRef();
+  if (win && !win.isDestroyed()) {
+    const payload: ScopeChangedEvent = { scope: nextScope, reason };
+    win.webContents.send(IpcChannel.app.scopeChanged, payload);
+  }
+  try {
+    onScopeSwitchedRef?.();
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** TEST-ONLY: clear the injected supervisor / window refs. */
+export function _resetForTests(): void {
+  switchChain = Promise.resolve();
+  supervisorRef = null;
+  getMainWindowRef = () => null;
+  endVoiceCallsRef = undefined;
+  teardownCeilingMs = undefined;
+  onScopeSwitchedRef = undefined;
+}

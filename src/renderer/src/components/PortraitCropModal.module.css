@@ -1,0 +1,67 @@
+/* PortraitCropModal.module.css — crop stage content only. Scrim, panel, title
+ * and footer come from ModalShell; the panel width is sized (frame + padding)
+ * so the stage/slider/footer fill the content box. Tokens only, sharp corners.
+ */
+
+.hint {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text-2);
+  margin: 0;
+}
+
+/* Fixed crop frame. The image is absolutely positioned inside; overflow:hidden
+ * clips it to the frame. The grab cursor signals it's draggable. */
+.stage {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.stage:active {
+  cursor: grabbing;
+}
+
+.img {
+  position: absolute;
+  max-width: none; /* defeat global img{max-width:100%} so zoom can exceed frame */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Subtle inner outline so the crop bounds read as a frame, not just a clip. */
+.frameOverlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
+
+/* Avatar shape: a circular cutout. The div is a centered circle; the huge
+ * outward box-shadow spread darkens everything OUTSIDE it (clipped by the
+ * stage's overflow:hidden), and the accent ring outlines the circle. This is
+ * the round profile-picture preview — what's inside the circle is what's kept. */
+.circleOverlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px var(--accent-soft);
+}
+
+.zoom {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.zoom:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

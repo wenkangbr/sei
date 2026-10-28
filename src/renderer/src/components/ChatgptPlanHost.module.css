@@ -1,0 +1,25 @@
+/* ChatgptPlanHost (261017): welcome + usage-limit dialog bodies. Tokens only. */
+
+.body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.welcomeHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text);
+}
+
+.welcomeTitle {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--text);
+}

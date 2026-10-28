@@ -1,0 +1,118 @@
+/* CallControls — mute / deafen / hang-up PILLS, shared by the fullscreen
+ * call view (lg) and the docked call section (sm). 260721 redesign: Discord-ish
+ * rounded-rectangle pills in a tight row — filled shapes, larger hit areas, no
+ * thin outline circles. Colors via tokens; neutral fills are text-tinted
+ * color-mix so they read on both themes. */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.controlsSm {
+  gap: var(--space-xs);
+}
+
+.pillBtn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 44px;
+  border-radius: 12px;
+  border: none;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.pillBtnSm {
+  width: 48px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.pillBtn:hover {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+/* Disabled with a reason (W9 vision gate): dimmed, no hover lift, but the
+ * cursor still reaches it so the title tooltip can explain why. */
+.pillBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pillBtn:disabled:hover {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+/* ── Over character art (260730) ───────────────────────────────────────────
+ * The backdrop call view paints these on top of an arbitrary picture, and the
+ * theme-tinted fills above assume they are on the app's own surface: a
+ * near-white icon in a 9%-white pill vanishes on Sui's pale sky, and inverting
+ * for light theme only moves the problem to dark art.
+ *
+ * So this variant is deliberately THEME-INDEPENDENT, the same reasoning the
+ * share view uses when it paints chrome over someone else's screen: a
+ * fixed dark scrim with white icons, the treatment every video player uses for
+ * exactly this reason. Radii, sizes and the hang-up red still come from the
+ * shared rules and tokens. */
+.controlsOnArt .pillBtn {
+  background: rgb(0 0 0 / 0.42);
+  color: white;
+}
+
+.controlsOnArt .pillBtn:hover {
+  background: rgb(0 0 0 / 0.6);
+}
+
+.controlsOnArt .pillBtnToggled,
+.controlsOnArt .pillBtnToggled:hover {
+  background: white;
+  color: rgb(0 0 0 / 0.82);
+}
+
+/* Toggled ON (muted / deafened): inverted fill so the state reads instantly
+ * (Discord's lit toggle), same in both themes. */
+.pillBtnToggled {
+  background: var(--text);
+  color: var(--window);
+}
+
+.pillBtnToggled:hover {
+  background: var(--text);
+  color: var(--window);
+  opacity: 0.88;
+}
+
+/* The distinct red hang-up pill, slightly wider than the toggles. */
+.pillBtnHangup {
+  width: 76px;
+  background: var(--red);
+  color: var(--accent-text);
+}
+
+.pillBtnSm.pillBtnHangup {
+  width: 58px;
+}
+
+.pillBtnHangup:hover {
+  background: var(--red-strong);
+  color: var(--accent-text);
+}
+
+/* Hang-up keeps its red on art too: the scrim rule above is more specific than
+ * the plain .pillBtnHangup, so the variant has to say so again. */
+.controlsOnArt .pillBtnHangup {
+  background: var(--red);
+  color: var(--accent-text);
+}
+
+.controlsOnArt .pillBtnHangup:hover {
+  background: var(--red-strong);
+}

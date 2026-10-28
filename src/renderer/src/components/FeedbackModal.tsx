@@ -1,0 +1,160 @@
+/**
+ * FeedbackModal — the standing "Submit feedback" form (260706).
+ *
+ * Opened from the plan screen after the one-time reward banner has been
+ * used (and anywhere else a feedback entry point makes sense). Email is
+ * optional: leaving it blank submits fully anonymously (the proxy stores no
+ * user id on the row). Server-side the proxy caps submissions at 20/day per
+ * account; the 429 surfaces here as honest daily-limit copy.
+ *
+ * Form scaffolding cloned from SetNewPasswordModal (fields / error / done
+ * sub-state swap); renders through ModalShell.
+ */
+
+import React, { useState } from 'react';
+import { sei } from '../lib/ipcClient';
+import { clearFeedbackDraft, getFeedbackDraft, setFeedbackDraft } from '../lib/feedbackDraft';
+import { useT } from '../lib/i18n';
+import { Button } from './Button';
+import { ModalShell, ModalFooter } from './ModalShell';
+import { TextField } from './TextField';
+import styles from './FeedbackModal.module.css';
+
+function submitErrorCopy(code: string): string {
+  switch (code) {
+    case 'PROXY_RATE_LIMITED':
+      return 'Daily feedback limit reached. Try again tomorrow.';
+    case 'PROXY_NO_SESSION':
+      return 'Sign in to submit feedback.';
+    default:
+      return 'Feedback could not be sent. Your message is still here. Check your connection and press Submit to try again.';
+  }
+}
+
+export interface FeedbackModalProps {
+  /** Closes the modal. Caller controls mount/unmount. */
+  onClose: () => void;
+  /** Optional copy overrides (e.g. the games picker's "Suggest a game").
+   * The submit path is identical regardless. Empty framing hides the line. */
+  title?: string;
+  framing?: string;
+  fieldLabel?: string;
+  placeholder?: string;
+  /** One extra line on the "Feedback sent" confirmation (261023: the games
+   * picker points a game wish at Backseat, which already covers any game). */
+  doneNote?: string;
+}
+
+export function FeedbackModal({
+  onClose,
+  title = 'Submit feedback',
+  framing = "Tell us anything you like or don't like! We read all comments within 24 hrs.",
+  fieldLabel = 'Feedback',
+  placeholder = 'What should we improve?',
+  doneNote,
+}: FeedbackModalProps): React.ReactElement {
+  const t = useT();
+  const [email, setEmail] = useState('');
+  // 260926: the draft outlives the modal, so a failed send followed by a
+  // close does not lose the text. Keyed by title: "Suggest a game" and
+  // "Submit feedback" are separate drafts.
+  const draftKey = `modal:${title}`;
+  const [body, setBodyState] = useState(() => getFeedbackDraft(draftKey));
+  const setBody = (v: string): void => {
+    setBodyState(v);
+    setFeedbackDraft(draftKey, v);
+  };
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const canSubmit = body.trim().length > 0 && !submitting;
+
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const trimmedEmail = email.trim();
+      const res = await sei.feedbackSubmit({
+        body: body.trim(),
+        ...(trimmedEmail ? { email: trimmedEmail } : {}),
+      });
+      if (res.ok) {
+        clearFeedbackDraft(draftKey);
+        setDone(true);
+      } else {
+        setError(submitErrorCopy(res.code));
+      }
+    } catch {
+      setError(submitErrorCopy('PROXY_NETWORK'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (done) return <FeedbackSent onClose={onClose} note={doneNote} />;
+
+  return (
+    <ModalShell title={t(title)} onClose={onClose} scrimClose width={440}>
+      {framing ? <p className={styles.framing}>{t(framing)}</p> : null}
+      <form className={styles.form} onSubmit={handleSubmit}>
+        <div className={styles.fieldGroup}>
+          <label className={styles.fieldLabel} htmlFor="feedback-email">
+            {t('Email (optional, leave blank to stay anonymous)')}
+          </label>
+          <TextField
+            value={email}
+            onChange={setEmail}
+            placeholder="you@example.com"
+            aria-label={t('Email, optional')}
+          />
+        </div>
+        <div className={styles.fieldGroup}>
+          <label className={styles.fieldLabel} htmlFor="feedback-body">
+            {t(fieldLabel)}
+          </label>
+          <TextField
+            value={body}
+            onChange={setBody}
+            multiline
+            rows={5}
+            autoFocus
+            placeholder={t(placeholder)}
+            aria-label={t(fieldLabel)}
+          />
+        </div>
+        {error ? (
+          <p className={styles.errorText} role="alert">
+            {t(error)}
+          </p>
+        ) : null}
+        <ModalFooter>
+          <Button kind="ghost" size="md" onClick={onClose} type="button">
+            {t('Cancel')}
+          </Button>
+          <Button kind="accent" size="md" type="submit" disabled={!canSubmit}>
+            {submitting ? t('Sending…') : t('Submit')}
+          </Button>
+        </ModalFooter>
+      </form>
+    </ModalShell>
+  );
+}
+
+/** The confirmation that replaces the form after a successful send. */
+export function FeedbackSent({ onClose, note }: { onClose: () => void; note?: string }): React.ReactElement {
+  const t = useT();
+  return (
+    <ModalShell title={t('Feedback sent')} onClose={onClose} scrimClose width={440}>
+      <p className={styles.framing}>{t('Thank you. We read all comments within 24 hrs.')}</p>
+      {note ? <p className={styles.framing}>{t(note)}</p> : null}
+      <ModalFooter>
+        <Button kind="accent" size="md" onClick={onClose}>
+          {t('Close')}
+        </Button>
+      </ModalFooter>
+    </ModalShell>
+  );
+}

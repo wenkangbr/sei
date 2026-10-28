@@ -1,0 +1,396 @@
+/**
+ * Dev-only window.sei stubs for the `?dashshot=` screenshot harness (260909).
+ *
+ * lib/ipcClient.ts captures `window.sei` the moment it is evaluated, and
+ * main.tsx's static import of App reaches it before any harness code can
+ * run, so a stub installed from inside the harness component arrives too
+ * late. This module is main.tsx's FIRST import for exactly that reason: it
+ * runs ahead of the rest of the graph. Outside a dev build, or in a window
+ * that already has the real bridge (Electron's preload), it does nothing.
+ * See components/games/DevDashShot.tsx for what the harness renders.
+ */
+const w = typeof window !== 'undefined' ? (window as unknown as { sei?: unknown; location: Location }) : null;
+if (import.meta.env.DEV && w && w.sei == null && new URLSearchParams(w.location.search).has('dashshot')) {
+  const noop = async (): Promise<undefined> => undefined;
+  const params = new URLSearchParams(w.location.search);
+  const ready = params.has('ready');
+  // ?dashshot=chat|chatdst (260917): the dashboard mounted INSIDE ChatScreen,
+  // so the game/chat split, the drag handle and the composer can be checked
+  // in a plain tab. ChatScreen reaches many more bridge methods than the
+  // panels do, so the stub becomes a Proxy: anything not listed answers an
+  // async undefined (or, for on* subscriptions, an unsubscribe), and the chat
+  // history is a fixture long enough to scroll.
+  const chatMode = (params.get('dashshot') ?? '').startsWith('chat');
+  // ?dashshot=creditwall (260926): the credit wall surfaces (usage-limit
+  // popup, Credits screen callout, Draw! paused card, free-play-back banner)
+  // over a fixture plan snapshot that is at the wall with the reset 3 days out.
+  // Add &lang=zh for the Chinese copy.
+  const creditWallMode = (params.get('dashshot') ?? '') === 'creditwall' || (params.get('dashshot') ?? '') === 'mcprofile';
+  // ?dashshot=roblox (260929): the backseat game tile flow. The lookups call
+  // through to functions a screenshot driver exposed (backed by the real
+  // main-side Roblox client), else answer from a small fixture.
+  const robloxMode = (params.get('dashshot') ?? '') === 'roblox';
+  type DevRoblox = {
+    __seiDevRobloxResolve?: (input: string) => Promise<unknown>;
+    __seiDevRobloxPopular?: () => Promise<unknown>;
+    __seiDevRobloxDetails?: (id: number) => Promise<unknown>;
+  };
+  const dev = window as unknown as DevRoblox;
+  const fixturePopular = [
+    { universeId: 1686885941, name: 'Brookhaven 🏡RP', creator: 'Brookhaven by Voldex', playing: 402_113 },
+    { universeId: 994732206, name: 'Blox Fruits', creator: 'Gamer Robot Inc', playing: 311_940 },
+    { universeId: 66654135, name: 'Murder Mystery 2', creator: 'Nikilis', playing: 98_310 },
+  ];
+  const thumb = (label: string, hue: number): string => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = 320;
+      c.height = 180;
+      const g = c.getContext('2d')!;
+      g.fillStyle = `hsl(${hue} 45% 22%)`;
+      g.fillRect(0, 0, 320, 180);
+      g.fillStyle = `hsl(${hue} 60% 70%)`;
+      g.font = '600 22px sans-serif';
+      g.fillText(label, 16, 96);
+      return c.toDataURL();
+    } catch {
+      return '';
+    }
+  };
+  // ?dashshot=perms (260929): the OS permission cards. Every permission reads
+  // denied and the Screen Recording probe never succeeds, so the cards hold
+  // still; `platform` follows the part (mic-win is Windows).
+  const permsMode = (params.get('dashshot') ?? '') === 'perms';
+  // ?dashshot=onboard (261012): OnboardApp from the intro. Analytics calls are
+  // kept on window.__seiDevTrack so a driver can read onboarding_step.
+  const onboardMode = (params.get('dashshot') ?? '') === 'onboard';
+  // ?dashshot=home (261013): the Home wall with the "up next" strip. `&step=`
+  // picks the card for the first companion: plan (a Minecraft plan, the
+  // default), call, untagged, goal, long (two-line clamp), or none (no card).
+  // Analytics calls are kept on window.__seiDevTrack.
+  const homeMode = (params.get('dashshot') ?? '') === 'home';
+  // ?dashshot=art (261023): names over character art (DevArtShot). The
+  // generic Proxy answers whatever the page, call and grid ask.
+  const artMode = (params.get('dashshot') ?? '') === 'art';
+  // ?dashshot=authchoice|signinmodal (261023): the sign-in surfaces with
+  // "Continue with ChatGPT". &reason=existing_account|new_device|unverified_email
+  // picks the code step the stubbed login answers; &gpt=fail answers a
+  // linked-elsewhere refusal instead. Code 000000 is "wrong", anything else
+  // signs in.
+  const authMode = ['authchoice', 'signinmodal'].includes(params.get('dashshot') ?? '');
+  // ?dashshot=voicekey (261020, T158): the ElevenLabs key surfaces.
+  // `&backend=local` for My key (default Sei Cloud), `&key=1` for a saved key.
+  const voiceKeyMode = (params.get('dashshot') ?? '') === 'voicekey';
+  const voiceKeyBackend = params.get('backend') === 'local' ? 'local' : 'cloud-proxy';
+  const voiceKeySaved = params.get('key') === '1';
+  // &chatgpt=1 (261023): local backend on the ChatGPT plan, one signed-in
+  // account, so the connected row renders.
+  const voiceKeyChatgpt = params.get('chatgpt') === '1';
+  const voiceKeyChatgptStatus = {
+    accounts: voiceKeyChatgpt
+      ? [{ id: 'acc1', email: 'player@example.com', label: 'player@example.com', signedIn: true, planEnabled: true }]
+      : [],
+    activeId: voiceKeyChatgpt ? 'acc1' : null,
+    signingIn: false,
+    usageLimited: false,
+    blockedCode: null,
+    welcomeSeen: true,
+    models: [],
+  };
+  const now = Date.now();
+  const chatRows = Array.from({ length: 24 }, (_, i) => ({
+    id: `row-${i}`,
+    role: i % 3 === 0 ? 'user' : 'companion',
+    text:
+      i % 3 === 0
+        ? `did you find any ${['iron', 'copper', 'a good fishing spot', 'the mine'][i % 4]} yet?`
+        : `not yet, still ${['watering the parsnips', 'chopping wood by the pond', 'clearing the debris north of the house', 'checking the shipping bin'][i % 4]}. give me a minute and i'll head over.`,
+    ts: now - (24 - i) * 90_000,
+  }));
+  // ?dashshot=chatfirst (260926): the guided first moment. An empty
+  // transcript, so the armed greeting fires, answered after a short think with
+  // a two-bubble greeting that ends on the Backseat offer (261023). `&nomc=1`
+  // reports no Minecraft install (Backseat + chess + call); `&lan=1` has a LAN
+  // world open (Minecraft leads); `&novision=1` is a text-only model (chess
+  // leads, no Backseat).
+  const firstMode = params.get('dashshot') === 'chatfirst';
+  const noMc = params.has('nomc');
+  const firstGreeting = async (): Promise<unknown[]> => {
+    await new Promise((r) => setTimeout(r, 900));
+    const lan = params.has('lan');
+    return [
+      { id: 'fm-1', role: 'companion', text: 'oh hey Robin, you made it!', ts: Date.now() },
+      {
+        id: 'fm-2',
+        role: 'companion',
+        text: lan
+          ? "i see your world is open. want me to hop in right now?"
+          : params.has('novision')
+            ? 'wanna play a quick game of chess with me? i promise to go easy. maybe.'
+            : "put a game on and share your screen, i'll watch and talk along.",
+        ts: Date.now(),
+      },
+    ];
+  };
+  const base: Record<string, unknown> = {
+    ...(robloxMode
+      ? {
+          track: () => undefined,
+          // The share picker checks Screen Recording first on macOS; the
+          // harness has it granted (?dashshot=perms&part=screen shows the gate).
+          permissionsStatus: async () => 'granted',
+          backseatGameResolve: async (_g: string, input: string) =>
+            dev.__seiDevRobloxResolve
+              ? dev.__seiDevRobloxResolve(input)
+              : { kind: 'results', results: fixturePopular.slice(0, 1) },
+          backseatGamePopular: async () =>
+            dev.__seiDevRobloxPopular ? dev.__seiDevRobloxPopular() : fixturePopular,
+          backseatGameDetails: async (_g: string, id: number) =>
+            dev.__seiDevRobloxDetails ? dev.__seiDevRobloxDetails(id) : null,
+          backseatSources: async () => [
+            { id: 'window:11:0', name: 'Notes', kind: 'window', thumbnail: thumb('Notes', 40) },
+            { id: 'window:12:0', name: 'Brookhaven - Roblox - Google Chrome', kind: 'window', thumbnail: thumb('Chrome', 210) },
+            { id: 'window:13:0', name: 'Roblox', kind: 'window', thumbnail: thumb('Roblox', 220) },
+            { id: 'window:14:0', name: 'Discord', kind: 'window', thumbnail: thumb('Discord', 250) },
+            { id: 'screen:0:0', name: 'Entire screen', kind: 'screen', thumbnail: thumb('Screen', 0) },
+          ],
+        }
+      : {}),
+    chatHistory: async () => (firstMode ? [] : chatMode ? chatRows : []),
+    chatOpened: firstMode ? firstGreeting : async () => [],
+    // The Proxy's generic answer is not a LanState; the data store seeds from
+    // this on start, so answer the real shape (open with `&lan=1`).
+    getLanState: async () =>
+      params.has('lan') ? { kind: 'open', port: 25565, motd: 'My World', lastSeenAt: Date.now() } : { kind: 'closed' },
+    chatHistoryOlder: async () => [],
+    chatPreviews: async () => ({}),
+    gameDashboardSetWatching: noop,
+    gameDashboardGet: async () => null,
+    mcDashboardSetWatching: noop,
+    mcDashboardSetPaused: noop,
+    mcDashboardSetMode: noop,
+    gameDashboardSetPaused: noop,
+    gameDashboardSetMode: noop,
+    stop: noop,
+    // The launch panels (?dashshot=mclaunch|dstlaunch|stardewlaunch): the
+    // game found but not set up; add `&ready=1` for the set-up state, so
+    // both the "Set up" and the "Launch" faces of a panel can be checked.
+    // detectMcInstalls answers `{ installs }`, the wizard's shape: a stub
+    // returning a bare array hid the 260909 "not detected" bug.
+    detectMcInstalls: async () => ({
+      installs: noMc ? [] : [
+        {
+          id: 'v1', kind: 'vanilla', label: 'Vanilla Launcher', path: '/Users/you/Library/Application Support/minecraft', mc_version: '26.1',
+          loader: ready ? 'fabric' : null, loader_version: ready ? '0.19.5' : null, fabric_mc_versions: ready ? ['26.1'] : [],
+          csl_installed: ready, csl_version: ready ? '14.28' : null, sei_enabled: ready, compatibility: 'full',
+        },
+      ],
+    }),
+    dstInstallState: async () => ({
+      kind: 'found', installPath: '/Applications/dontstarve_steam.app', modsDir: '/Applications/dontstarve_steam.app/Contents/mods',
+      modInstalled: ready, modVersion: ready ? '0.2.0' : null, enabled: ready, gameRunning: false, needsRestart: false,
+    }),
+    dstInstall: noop,
+    dstLaunch: noop,
+    dstOpenAppManagement: noop,
+    // A real-length reason (the v0.6.5 smoke test's ran three lines).
+    dstSurvivorGet: async () => ({
+      prefab: 'winona',
+      source: 'auto',
+      reason: "she's the only one who gets that being bad at games is actually fine, just make the tools work smarter, not harder, and let your teammate carry the rest.",
+    }),
+    dstSurvivorSet: async () => ({ prefab: 'wickerbottom', source: 'user', reason: '' }),
+    onDstInstallProgress: () => () => undefined,
+    stardewInstallState: async () => ({
+      gamePath: '/Users/you/Library/Application Support/Steam/steamapps/common/Stardew Valley/Contents/MacOS',
+      candidates: ['/Users/you/Library/Application Support/Steam/steamapps/common/Stardew Valley/Contents/MacOS', '/Applications/Stardew Valley.app/Contents/MacOS'],
+      smapiInstalled: ready, smapiVersion: ready ? '4.5.2' : null, modInstalled: ready, modVersion: ready ? '0.1.0' : null,
+      modConfig: ready ? { port: 27431, hasToken: true } : null, store: 'steam', platform: 'darwin', ready,
+    }),
+    stardewInstall: noop,
+    stardewLaunch: async () => ({ launched: true, via: 'launcher' }),
+    onStardewInstallProgress: () => () => undefined,
+    // 260929: Start Minecraft. `&nolauncher=1` answers the fallback line.
+    startMinecraft: async () =>
+      params.has('nolauncher')
+        ? { ok: false, reason: 'no_launcher', profileName: 'Sei 26.1' }
+        : { ok: true, profileName: 'Sei 26.1', mcVersion: '26.1', launcher: 'mac', alreadyOpen: false },
+    // `&launcherquit=1`: the launcher is gone by the first check, so the
+    // hint under Start Minecraft changes after 20 seconds.
+    minecraftRunning: async () => !params.has('launcherquit'),
+    platform: params.get('platform') ?? 'darwin',
+    worldCheckNow: async () => null,
+    lanCheckNow: async () => ({ kind: 'closed' }),
+    getConfig: async () => ({}),
+    // `&plan=quest|party` (261023): a subscriber's plan cards; `&under=1`
+    // answers an account that still has allowance left (no wall).
+    creditsGet: async () => ({
+      plan: params.get('plan') === 'quest' || params.get('plan') === 'party' ? params.get('plan') : 'free',
+      usage_pct: params.has('under') ? 40 : 100,
+      over_limit: !params.has('under'),
+      resets_at: new Date(now + 3 * 86_400_000).toISOString(),
+      extra_credits_used: 0,
+      extra_credits_total: 0,
+      renews_at: null,
+      ends_at: null,
+      subscription_status_raw: null,
+      ai_backend_kind: 'cloud-proxy',
+      feedback_reward_available: false,
+    }),
+    saveConfig: noop,
+    openExternal: noop,
+    // `&pack=missing` (260929): the pack card's download offer, the tallest
+    // state a launch panel has.
+    gamePackState: async () => (params.get('pack') === 'missing' ? { kind: 'missing' } : { kind: 'ready', root: '/r' }),
+    gamePackEnsure: async () => ({ kind: 'ready', root: '/r' }),
+    onGamePackProgress: () => () => undefined,
+    wizardPromptShown: async () => ({ shown: true }),
+    getWizardState: async () => ({ version: 1, hasRunOnce: false, enabledInstallIds: [], lastRunAt: null, lastSkinServerPort: null }),
+    ...(permsMode
+      ? {
+          platform: params.get('part') === 'mic-win' ? 'win32' : 'darwin',
+          permissionsStatus: async () => 'denied',
+          permissionsProbeScreen: async () => false,
+          permissionsTakeResume: async () => null,
+          track: () => undefined,
+        }
+      : {}),
+    ...(homeMode
+      ? {
+          // &art= (261023): every wall slot has a last line, the call row
+          // Shawn's report showed, so the hover reveal has text to measure.
+          ...(params.has('art')
+            ? {
+                chatPreviews: async () =>
+                  Object.fromEntries(
+                    ['sui', 'marv', 'lyra'].map((n) => [
+                      `dashshot-home-${n}`,
+                      { role: 'system', text: `You and ${n[0].toUpperCase()}${n.slice(1)} called for a few seconds.`, ts: Date.now() - 3_600_000 },
+                    ]),
+                  ),
+              }
+            : {}),
+          homeNextSteps: async (ids: string[]) => {
+            const kind = params.get('step') ?? 'plan';
+            const id = ids[0];
+            if (!id || kind === 'none') return {};
+            const at = Date.now() - 20 * 3_600_000;
+            // &text= (261014): a given plan text, for rendering real
+            // generated plans (scripts/next-step-examples.ts); &surface=call
+            // makes it a call plan, anything else a Minecraft plan.
+            // &game= (261020) picks the plan's game: stardew, dontstarve,
+            // or unknown (a game plan with no game, which offers the picker).
+            const given = params.get('text');
+            const surface = params.get('surface') === 'call' ? 'call' : 'game';
+            const gameParam = params.get('game');
+            const game = surface !== 'game' ? null : gameParam === 'unknown' ? null : gameParam === 'stardew' || gameParam === 'dontstarve' ? gameParam : 'minecraft';
+            const card = given
+              ? { source: 'plan', text: given, surface, game }
+              : kind === 'goal'
+                ? { source: 'goal', text: 'Get iron tools together', surface: 'game', game: 'minecraft' }
+                : kind === 'call'
+                  ? { source: 'plan', text: 'Ask how the job interview went', surface: 'call', game: null }
+                  : kind === 'untagged'
+                    ? { source: 'plan', text: 'Finish the cabin roof', surface: null, game: null }
+                    : kind === 'long'
+                      ? {
+                          source: 'plan',
+                          text: 'Finish the lake house roof with the spruce planks we saved, then build the dock out past the reeds so we can fish from it at night',
+                          surface: 'game',
+                          game: 'minecraft',
+                        }
+                      : { source: 'plan', text: 'Finish the lake house roof with the spruce planks we saved', surface: 'game', game: 'minecraft' };
+            return { [id]: { characterId: id, at, ...card } };
+          },
+          track: (event: string, props: unknown) => {
+            const dev = window as unknown as { __seiDevTrack?: Array<{ event: string; props: unknown; at: number }> };
+            (dev.__seiDevTrack ??= []).push({ event, props, at: Date.now() });
+          },
+        }
+      : {}),
+    ...(voiceKeyMode
+      ? {
+          getConfig: async () => ({
+            ai_backend_kind: voiceKeyBackend,
+            tts_engine: 'elevenlabs',
+            ...(voiceKeyChatgpt ? { provider: 'chatgpt' } : {}),
+          }),
+          chatgptStatus: async () => voiceKeyChatgptStatus,
+          onChatgptStatus: () => () => {},
+          creditsGet: async () => ({
+            plan: 'free',
+            usage_pct: 10,
+            over_limit: false,
+            resets_at: new Date(now + 3 * 86_400_000).toISOString(),
+            extra_credits_used: 0,
+            extra_credits_total: 0,
+            renews_at: null,
+            ends_at: null,
+            subscription_status_raw: null,
+            ai_backend_kind: voiceKeyBackend,
+            feedback_reward_available: false,
+          }),
+          hasApiKey: async () => voiceKeyBackend === 'local',
+          voiceElevenKeyStatus: async () => ({ present: voiceKeySaved }),
+          voicePreviewAvailable: async () => true,
+          voiceListVoices: async () => [
+            { id: 'f1', label: 'Sarah', gender: 'female', age: 'young', tags: [], vibe: 'bright and warm' },
+            { id: 'f2', label: 'Lily', gender: 'female', age: 'adult', tags: [], vibe: 'soft, British' },
+            { id: 'm1', label: 'Liam', gender: 'male', age: 'young', tags: [], vibe: 'easygoing, American' },
+          ],
+          voiceListOwnVoices: async () =>
+            voiceKeySaved
+              ? {
+                  status: 'ok',
+                  voices: [
+                    { id: 'own1', name: 'My voice', category: 'cloned', hasPreview: true },
+                    { id: 'own2', name: 'Narrator', category: 'generated', description: 'calm storyteller', hasPreview: true },
+                  ],
+                }
+              : { status: 'unavailable', voices: [] },
+        }
+      : {}),
+    // The onboarding AuthPanel reuses the same ChatGPT stubs (?dashshot=onboard).
+    ...(authMode || onboardMode
+      ? {
+          regionStatus: async () => ({ blocked: false }),
+          signInChatgpt: async () => {
+            await new Promise((r) => setTimeout(r, 400));
+            if (params.get('gpt') === 'fail') {
+              return { ok: false, reason: 'linked_elsewhere', message: 'linked elsewhere' };
+            }
+            return {
+              ok: true,
+              kind: 'email_code',
+              emailHint: 's***@example.com',
+              reason: params.get('reason') ?? 'existing_account',
+            };
+          },
+          chatgptLoginVerifyCode: async (code: string) =>
+            code === '000000'
+              ? { ok: false, reason: 'invalid_code', message: 'wrong' }
+              : { ok: true, kind: 'signed_in', created: false, planEnabled: true },
+          chatgptLoginResendCode: async () => ({ ok: true }),
+        }
+      : {}),
+    ...(onboardMode
+      ? {
+          track: (event: string, props: unknown) => {
+            const dev = window as unknown as { __seiDevTrack?: Array<{ event: string; props: unknown; at: number }> };
+            (dev.__seiDevTrack ??= []).push({ event, props, at: Date.now() });
+          },
+        }
+      : {}),
+  };
+  (window as unknown as { sei: Record<string, unknown> }).sei = authMode || chatMode || creditWallMode || robloxMode || permsMode || onboardMode || homeMode || voiceKeyMode || artMode
+    ? new Proxy(base, {
+        get(target, key) {
+          if (key in target) return target[key as string];
+          if (typeof key === 'string' && key.startsWith('on')) return () => () => undefined;
+          return noop;
+        },
+      })
+    : base;
+}
+
+export {};

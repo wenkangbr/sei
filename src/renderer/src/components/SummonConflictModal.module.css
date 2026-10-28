@@ -1,0 +1,23 @@
+/* SummonConflictModal.module.css — multi-summon name-collision popup body.
+ * Scrim + panel + title come from ModalShell; this styles the copy only. */
+
+.body {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+.username {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
+}

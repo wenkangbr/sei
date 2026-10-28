@@ -1,0 +1,83 @@
+// src/bot/adapter/minecraft/behaviors/weaponSelect.js — hold the best melee
+// weapon before a fight.
+//
+// 261011: nothing on the fight path equipped anything. Quality eval
+// 2026-10-11 (combat_night): after crafting she held planks or nothing while
+// two zombies hit her, the auto-retaliation swung bare-handed, and she died
+// from full health with a stone sword in her inventory. attackEntity and the
+// automatic swing-back now put the best weapon she owns in her hand first,
+// like dig does with tools (toolSelect.js).
+//
+// Ranking is by damage per hit at the bot's fixed 600ms swing cadence. Swords
+// recover in 625ms, so they deal full damage at that cadence; axes recover in
+// 1000-1250ms and deal a fraction of their listed damage, so any sword beats
+// any axe and an axe beats bare hands.
+
+const SWORD_DAMAGE = {
+  wooden_sword: 4, golden_sword: 4, stone_sword: 5,
+  iron_sword: 6, diamond_sword: 7, netherite_sword: 8,
+}
+const AXE_DAMAGE = {
+  wooden_axe: 7, golden_axe: 7, stone_axe: 9,
+  iron_axe: 9, diamond_axe: 9, netherite_axe: 10,
+}
+const EQUIP_TIMEOUT_MS = 1500
+
+/** Score of an item as a melee weapon; 0 for anything that is not one. */
+export function weaponScore(name) {
+  if (!name) return 0
+  if (SWORD_DAMAGE[name]) return 100 + SWORD_DAMAGE[name]
+  if (name === 'trident') return 100 + 9
+  if (name === 'mace') return 100 + 6
+  if (AXE_DAMAGE[name]) return 10 + AXE_DAMAGE[name]
+  return 0
+}
+
+/** The best weapon in the inventory, or null when there is none. */
+export function chooseWeapon(bot) {
+  let best = null
+  let bestScore = 0
+  let items = []
+  try { items = bot?.inventory?.items?.() ?? [] } catch { items = [] }
+  for (const it of items) {
+    const s = weaponScore(it?.name)
+    if (s > bestScore) { bestScore = s; best = it }
+  }
+  return best
+}
+
+/**
+ * Equip the best weapon the bot owns when it beats what is in hand.
+ * Best-effort: a failed or slow equip never blocks the fight.
+ * Returns the name equipped, or null when nothing changed.
+ */
+export async function equipBestWeapon(bot) {
+  const best = chooseWeapon(bot)
+  if (!best) return null
+  if (weaponScore(best.name) <= weaponScore(bot?.heldItem?.name)) return null
+  if (typeof bot?.equip !== 'function') return null
+  const op = Promise.resolve().then(() => bot.equip(best, 'hand')).then(() => true).catch(() => false)
+  let timer
+  const tmo = new Promise((r) => { timer = setTimeout(() => r(false), EQUIP_TIMEOUT_MS) })
+  const ok = await Promise.race([op, tmo])
+  clearTimeout(timer)
+  return ok ? best.name : null
+}
+
+/**
+ * Put the best weapon back in hand during a fight, without blocking the swing
+ * loop. Single-flight per bot; skipped while eating (an equip would cancel the
+ * bite). 261011: the weapon was equipped once, before the first swing, and
+ * anything that changed the hand after that (auto-eat's food, a block placed
+ * mid-fight) stayed there for the rest of the fight.
+ * @returns {boolean} true when an equip was started
+ */
+export function keepWeaponInHand(bot) {
+  if (!bot || bot._seiWeaponEquipping) return false
+  if (bot.autoEat?.isEating) return false
+  const best = chooseWeapon(bot)
+  if (!best || weaponScore(best.name) <= weaponScore(bot.heldItem?.name)) return false
+  bot._seiWeaponEquipping = true
+  equipBestWeapon(bot).catch(() => {}).finally(() => { bot._seiWeaponEquipping = false })
+  return true
+}

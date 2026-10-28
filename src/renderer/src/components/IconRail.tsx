@@ -1,0 +1,645 @@
+/**
+ * IconRail / Sidebar — Discord-style vertical sidebar.
+ *
+ * B3 refactor of the prior fixed-icon rail. New layout top→bottom:
+ *   1. Home pill (RosterIcon — 2×2 grid) — active when view ∈ {home, character, add-character}
+ *   2. Compass / World icon — sits directly under Home (mockup Sidebar parity).
+ *      Opens the World tab (sets homeTab='world' then navigate home); active
+ *      while the World tab is selected.
+ *   3. Thin divider
+ *   4. Scrollable 40px circular character sockets sorted by last_launched desc,
+ *      then created desc. Active when view.kind==='character' && id matches.
+ *      Each socket carries a top-right activity badge when the character is
+ *      on a voice call (phone) or in a live game session (controller) — see
+ *      avatarActivityBadge below.
+ *   5. Round + button — opens the awaken flow; hidden once every companion
+ *      slot is taken (260731b)
+ *   6. Flex spacer
+ *   7. Credits/Cloud icon — StarIcon (4-point) in BOTH states for consistent
+ *      rail iconography; only the click target differs:
+ *        - cloud-proxy → navigate credits
+ *        - local + signed in   → SwitchBackendConfirmModal → flip to cloud-proxy
+ *          directly (NO sign-in re-prompt — the user already has a session).
+ *        - local + signed out  → inline "Switch to cloud?" confirm dialog →
+ *          SignInModal; once signed in the switch completes automatically.
+ *   8. Settings icon
+ *   9. "Update Sei" (UpdateRailButton, 261023): only while an update is
+ *      downloading or ready; full rail width, flush with the bottom edge
+ *
+ * Removed: Minecraft button, Add-game (Plus → coming-soon) button.
+ * Scrollbar hidden on the avatar cluster; only the avatar cluster scrolls.
+ *
+ * Source: B3 spec; D-34 (no Minecraft branding in rail); UI-SPEC §Component
+ * Inventory → IconRail/Sidebar (updated by B3 sub-task).
+ */
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import styles from './IconRail.module.css';
+import {
+  CompassIcon,
+  GamepadIcon,
+  PhoneIcon,
+  RosterIcon,
+  PlusIcon,
+  SettingsIcon,
+  StarIcon,
+} from './icons';
+import { PixelPortrait } from './PixelPortrait';
+import { Button } from './Button';
+import { ModalShell, ModalFooter } from './ModalShell';
+import { SignInModal } from './SignInModal';
+import { SwitchBackendConfirmModal } from './SwitchBackendConfirmModal';
+import { UpdateRailButton } from './UpdateRailButton';
+import { sei } from '../lib/ipcClient';
+import { lastInteractionAt } from '../lib/lastInteraction';
+import { isHomeCharacter } from '../lib/homeLibrary';
+import { MAX_COMPANION_SLOTS } from '@shared/characterSchema';
+import { useUiStore } from '../lib/stores/useUiStore';
+import { resolvedScheme } from '../lib/theme';
+import { useDataStore } from '../lib/stores/useDataStore';
+import { useAuthStore } from '../lib/stores/useAuthStore';
+import { useCreditsStore } from '../lib/stores/useCreditsStore';
+import { useLibraryStateStore } from '../lib/stores/useLibraryStateStore';
+import { useBrowseStore } from '../lib/stores/useBrowseStore';
+import { useVoiceStore } from '../lib/stores/useVoiceStore';
+import { useChessStore } from '../lib/stores/useChessStore';
+import { useBackseatStore } from '../lib/stores/useBackseatStore';
+import { pickPalette } from '../lib/portraitPalettes';
+import { portraitSrc } from '../lib/portraitSrc';
+import { useT } from '../lib/i18n';
+
+/**
+ * Tooltip hover state lifted to the IconRail component so it can render a
+ * SINGLE position:fixed tooltip outside any overflow:hidden / scroll
+ * container. Discord-style tooltips inside .avatarCluster (overflow-y: auto)
+ * were getting clipped on the x-axis because CSS forces the perpendicular
+ * overflow when one axis is auto/scroll — position:absolute children can't
+ * escape that without JS-driven positioning.
+ *
+ * Each rail button calls setHover with the label + the y-anchor of its
+ * vertical center (so the tooltip lines up regardless of where in the scroll
+ * container the button sits). The shared tooltip is rendered once near the
+ * end of the IconRail JSX.
+ */
+interface TooltipState { label: string; y: number }
+
+type SetHover = (s: TooltipState | null) => void;
+
+function attachHover(
+  el: HTMLElement | null,
+  label: string,
+  setHover: SetHover,
+): void {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  setHover({ label, y: r.top + r.height / 2 });
+}
+
+interface RailButtonProps {
+  active?: boolean;
+  onClick?: () => void;
+  title?: string;
+  badge?: boolean;
+  muted?: boolean;
+  /** When true, omit the active-bar so circular avatars can carry their own focus ring. */
+  noActiveBar?: boolean;
+  /** Optional warm-up fired on hover / focus (e.g. prefetch the World grid). */
+  onHoverStart?: () => void;
+  setHover: SetHover;
+  children: React.ReactNode;
+  /** Tutorial spotlight anchor (260728) — see components/tutorial. */
+  dataTutorial?: string;
+}
+
+function RailButton({
+  active,
+  onClick,
+  title,
+  badge,
+  muted,
+  noActiveBar,
+  onHoverStart,
+  setHover,
+  children,
+  dataTutorial,
+}: RailButtonProps): React.ReactElement {
+  const cls = [
+    styles.railButton,
+    active ? styles.active : '',
+    muted ? styles.muted : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <button
+      onClick={onClick}
+      aria-label={title}
+      className={cls}
+      type="button"
+      data-tutorial={dataTutorial}
+      onMouseEnter={(e) => {
+        if (title) attachHover(e.currentTarget, title, setHover);
+        onHoverStart?.();
+      }}
+      onMouseLeave={() => setHover(null)}
+      onFocus={(e) => {
+        if (title) attachHover(e.currentTarget, title, setHover);
+        onHoverStart?.();
+      }}
+      onBlur={() => setHover(null)}
+    >
+      {active && !noActiveBar && <span className={styles.activeBar} aria-hidden="true" />}
+      {children}
+      {badge && <span className={styles.badge} aria-hidden="true" />}
+    </button>
+  );
+}
+
+/**
+ * Presence-style activity badge on a rail avatar: which live activity (if
+ * any) the character is engaged in right now.
+ *
+ *   'call' — the character is a participant on the open voice call
+ *            (status 'live', or 'connecting' while the first dial is in
+ *            flight).
+ *   'game' — the character has an active game session: a chess game that
+ *            has not ended (both 'preparing' engine warm-up and 'active'
+ *            count; the session exists from the player's point of view),
+ *            an active screen-share watch session, or an online Minecraft
+ *            bot session.
+ *   null   — no live activity, no badge.
+ *
+ * A call wins over a game when both are somehow live for the same
+ * character. Pure function of the store slices so it can be unit tested
+ * without mounting the rail (see IconRail.activityBadge.test.ts).
+ */
+export type AvatarActivityBadge = 'call' | 'game' | null;
+
+export interface ActivityBadgeStores {
+  /** useVoiceStore.status ('idle' | 'connecting' | 'live' | 'error'). */
+  callStatus: string;
+  /** useVoiceStore.participants — companions on the open call. */
+  callParticipants: readonly string[];
+  /** useChessStore.games — characterId → last game snapshot (or null). */
+  chessGames: Readonly<Record<string, { status: string } | null | undefined>>;
+  /** useDataStore.summons — characterId → bot status (absent = not summoned).
+   * The authoritative "online MC bot session" signal; the mc dashboard
+   * store's snapshots are telemetry keyed off this same session. */
+  summons: Readonly<Record<string, { kind: string } | undefined>>;
+  /** useBackseatStore.active — characterId → true while watching a screen
+   * share (260728). The share mounts no panel in the chat game area: it is
+   * drawn inside the call view (260803; before that, its own always-on-top
+   * window), so this flag is the ONLY signal the rail has that the character
+   * is busy with one. */
+  backseat?: Readonly<Record<string, boolean | undefined>>;
+}
+
+export function avatarActivityBadge(
+  characterId: string,
+  s: ActivityBadgeStores,
+): AvatarActivityBadge {
+  const onCall =
+    (s.callStatus === 'live' || s.callStatus === 'connecting') &&
+    s.callParticipants.includes(characterId);
+  if (onCall) return 'call';
+  const chess = s.chessGames[characterId];
+  const chessLive = chess != null && chess.status !== 'ended';
+  const mcOnline = s.summons[characterId]?.kind === 'online';
+  const watching = s.backseat?.[characterId] === true;
+  return chessLive || mcOnline || watching ? 'game' : null;
+}
+
+/**
+ * Single avatar in the scrollable character cluster. Uses the character's
+ * portrait_image when present (rendered as a circular <img>), otherwise
+ * a 40px PixelPortrait inside a circular clip.
+ */
+interface AvatarButtonProps {
+  characterId: string;
+  characterName: string;
+  portraitImage: string | null;
+  active: boolean;
+  /** This character has a live (or connecting) bot session — frame + glint. */
+  summoned: boolean;
+  /** Live activity badge on the avatar's top-right corner (null = none). */
+  activity: AvatarActivityBadge;
+  onClick: () => void;
+  theme: 'light' | 'dark';
+  setHover: SetHover;
+}
+
+function AvatarButton({
+  characterId,
+  characterName,
+  portraitImage,
+  active,
+  summoned,
+  activity,
+  onClick,
+  theme,
+  setHover,
+}: AvatarButtonProps): React.ReactElement {
+  const t = useT();
+  const palette = useMemo(
+    () => pickPalette(characterId + characterName, theme),
+    [characterId, characterName, theme],
+  );
+  // A broken portrait ref (stale path, dead URL) must fall back to the
+  // procedural sprite, never a blank circle (the blank IconRail avatars
+  // report, 260907). Reset when the ref changes so a re-upload recovers.
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [portraitImage]);
+  const cls = [
+    styles.avatarButton,
+    active ? styles.avatarActive : '',
+    summoned ? styles.avatarSummoned : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  // Screen readers get the live activity as a suffix on the avatar's name.
+  const ariaLabel =
+    activity === 'call'
+      ? t('{name}, on a call', { name: characterName })
+      : activity === 'game'
+        ? t('{name}, playing a game', { name: characterName })
+        : characterName;
+  return (
+    <button
+      type="button"
+      className={cls}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      onMouseEnter={(e) => attachHover(e.currentTarget, characterName, setHover)}
+      onMouseLeave={() => setHover(null)}
+      onFocus={(e) => attachHover(e.currentTarget, characterName, setHover)}
+      onBlur={() => setHover(null)}
+    >
+      {/*
+        Wrapper enforces the circular crop. Browsers honor `border-radius`
+        on <img>, but non-square portraits with `object-fit:cover` + the
+        `image-rendering: pixelated` rule have shown inconsistent clipping
+        in some Electron builds. A wrapping div with `overflow: hidden`
+        is the bulletproof crop.
+      */}
+      <span className={styles.avatarClip} aria-hidden="true">
+        {portraitImage && !imgFailed ? (
+          <img
+            src={portraitSrc(portraitImage)!}
+            alt=""
+            width={40}
+            height={40}
+            className={styles.avatarImg}
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <PixelPortrait
+            seed={characterId + characterName}
+            palette={palette}
+            size={40}
+            className={styles.avatarImg}
+            aria-label={characterName}
+          />
+        )}
+      </span>
+      {/* Activity badge — sits OUTSIDE .avatarClip so the circular crop
+          doesn't shave it; the panel-colored ring separates it from the
+          avatar art. aria-hidden: the activity is already in the button's
+          aria-label suffix. */}
+      {activity ? (
+        <span className={styles.activityBadge} aria-hidden="true">
+          {activity === 'call' ? <PhoneIcon size={8} /> : <GamepadIcon size={9} single />}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+export function IconRail(): React.ReactElement {
+  const t = useT();
+  const view = useUiStore((s) => s.view);
+  const navigate = useUiStore((s) => s.navigate);
+  const setHomeTab = useUiStore((s) => s.setHomeTab);
+  const characters = useDataStore((s) => s.characters);
+  // Per-character summoned state (multi-summon) — drives the avatar frame+glint.
+  const summons = useDataStore((s) => s.summons);
+  // Live-activity badge inputs (read-only slices; see avatarActivityBadge).
+  const callStatus = useVoiceStore((s) => s.status);
+  const callParticipants = useVoiceStore((s) => s.participants);
+  const chessGames = useChessStore((s) => s.games);
+  const backseatActive = useBackseatStore((s) => s.active);
+  const authState = useAuthStore((s) => s.state);
+  const currentUserId = authState.kind === 'signed_in' ? authState.user.id : null;
+  const aiBackendKind = useCreditsStore((s) => s.ai_backend_kind);
+  // Plan-button tooltip shows live weekly usage; fall back to the plain label
+  // when the snapshot hasn't loaded (a "Usage: 0%" would be a lie).
+  const usagePct = useCreditsStore((s) => s.usage_pct);
+  const usageKnown = useCreditsStore((s) => s.initialized && !s.snapshotFailed);
+
+  // B3 — local confirm dialog for the cloud-icon click when the user is on
+  // the local backend. Two-button "Switch to cloud?" panel that, on
+  // continue, opens the existing SignInModal. Component-level state keeps
+  // this self-contained (no global modal needed).
+  const [showCloudPrompt, setShowCloudPrompt] = useState(false);
+  const [showSignIn, setShowSignIn] = useState(false);
+  // Already-signed-in user switching BYOK → cloud: the backend-switch confirm
+  // (same modal Settings uses). No sign-in re-prompt — they have a session.
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+  // Set when a signed-OUT user takes the "Switch to cloud" path: after they
+  // finish signing in we complete the switch automatically (see effect below).
+  const [pendingCloudAfterSignIn, setPendingCloudAfterSignIn] = useState(false);
+  const [hoverTip, setHoverTip] = useState<TooltipState | null>(null);
+
+  // Flip the AI backend to cloud-proxy (the canonical switch SettingsScreen
+  // uses), refresh the credits store so the rail swaps to the Playtime icon +
+  // unlocks the credits surface, then land on it.
+  const switchToCloud = useCallback(async (): Promise<void> => {
+    await sei.proxyConfigure('cloud-proxy');
+    await useCreditsStore.getState().refresh();
+    navigate({ kind: 'credits' });
+  }, [navigate]);
+
+  // Complete a "switch to cloud" that was waiting on sign-in: once the user is
+  // signed in, flip the backend without a second prompt. Guarded by the
+  // pending flag (set only by the signed-out cloud path) so an unrelated
+  // sign-in never triggers an unwanted backend switch.
+  useEffect(() => {
+    if (pendingCloudAfterSignIn && currentUserId) {
+      setPendingCloudAfterSignIn(false);
+      setShowSignIn(false);
+      void switchToCloud();
+    }
+  }, [pendingCloudAfterSignIn, currentUserId, switchToCloud]);
+
+  // Cloud-icon click on the LOCAL backend. Signed-in users go straight to the
+  // backend-switch confirm (the bug fix: never re-prompt for sign-in when a
+  // session already exists); signed-out users get the sign-in path.
+  const handleCloudClick = (): void => {
+    if (currentUserId) setShowSwitchConfirm(true);
+    else setShowCloudPrompt(true);
+  };
+
+  const theme: 'light' | 'dark' = resolvedScheme();
+
+  // The Home and World tabs are sibling surfaces; a character profile (and the
+  // add-character flow) is opened ON TOP of whichever tab the user was on.
+  // ITEM 7: opening a character from the World page must KEEP the rail on World
+  // — previously `view.kind === 'character'` unconditionally lit the Home pill,
+  // so the rail snapped to Home on every profile open. Gate both pills on the
+  // preserved `homeTab` instead (it isn't mutated when navigating to a profile),
+  // so the rail reflects the originating tab.
+  const homeTab = useUiStore((s) => s.homeTab);
+  const onHomeSurface =
+    view.kind === 'home' || view.kind === 'character' || view.kind === 'add-character';
+  const homeActive = onHomeSurface && homeTab === 'home';
+  const worldActive = onHomeSurface && homeTab === 'world';
+
+  // Filter to the user's home library — the SHARED isHomeCharacter rule, so
+  // the rail, the Home grid, and the slots indicator never diverge. (260706:
+  // an inline copy here skipped the owner check when signed out, so cached
+  // copies of other users' World characters showed on the rail while the
+  // slots indicator counted zero.)
+  const addedDefaultIds = useLibraryStateStore((s) => s.addedDefaultIds);
+  const addedWorldIds = useLibraryStateStore((s) => s.addedWorldIds);
+  const homeCharacters = useMemo(() => {
+    return characters.filter((c) =>
+      isHomeCharacter(c, currentUserId, addedDefaultIds, addedWorldIds),
+    );
+  }, [characters, currentUserId, addedDefaultIds, addedWorldIds]);
+
+  // Stable sort: last interaction desc (summon OR chat; nulls last), then created
+  // desc — then capped at MAX_COMPANION_SLOTS so the rail mirrors the home party
+  // wall's fixed 4 slots (same set, same order), never a longer list.
+  const sortedCharacters = useMemo(() => {
+    const copy = homeCharacters.slice();
+    copy.sort((a, b) => {
+      const aLast = lastInteractionAt(a) ?? '';
+      const bLast = lastInteractionAt(b) ?? '';
+      if (aLast !== bLast) {
+        // Most-recently-active first; empty strings (no activity) sort last.
+        if (!aLast) return 1;
+        if (!bLast) return -1;
+        return bLast.localeCompare(aLast);
+      }
+      const aCreated = a.created ?? '';
+      const bCreated = b.created ?? '';
+      return bCreated.localeCompare(aCreated);
+    });
+    return copy.slice(0, MAX_COMPANION_SLOTS);
+  }, [homeCharacters]);
+
+  const handleCompassClick = (): void => {
+    setHomeTab('world');
+    navigate({ kind: 'home' });
+  };
+
+  return (
+    <>
+      <nav className={styles.rail} aria-label={t('Primary')}>
+        <div className={styles.cluster}>
+          <RailButton
+            active={homeActive}
+            onClick={() => {
+              setHomeTab('home');
+              navigate({ kind: 'home' });
+            }}
+            title={t('Home')}
+            setHover={setHoverTip}
+            dataTutorial="rail-home"
+          >
+            <RosterIcon size={22} />
+          </RailButton>
+          {/* World nav — directly under Home (mockup Sidebar parity). */}
+          <RailButton
+            active={worldActive}
+            onClick={handleCompassClick}
+            title={t('World')}
+            // Warm the World grid's first page while the pointer is still on
+            // the icon, so the public characters are already loaded by the time
+            // the tab opens instead of popping in after the local/default ones.
+            onHoverStart={() => void useBrowseStore.getState().prefetch()}
+            setHover={setHoverTip}
+          >
+            <CompassIcon size={22} />
+          </RailButton>
+        </div>
+
+        <div className={styles.divider} aria-hidden="true" />
+
+        {/*
+          Avatar cluster: scrollable column of character circles followed by
+          the round + (new) button. Keeping plus inside this cluster — and
+          shrinking the cluster to content height — means it sits RIGHT under
+          the last character instead of being pushed to the bottom of the rail
+          by a flex spacer. (The World/compass nav moved up under Home.)
+        */}
+        <div className={styles.avatarCluster}>
+          {sortedCharacters.map((c) => (
+            <AvatarButton
+              key={c.id}
+              characterId={c.id}
+              characterName={c.name}
+              portraitImage={c.portrait_image}
+              active={
+                (view.kind === 'character' && view.id === c.id) ||
+                ((view.kind === 'chat' || view.kind === 'voice-call') &&
+                  view.characterId === c.id)
+              }
+              summoned={summons[c.id]?.kind === 'online' || summons[c.id]?.kind === 'connecting'}
+              activity={avatarActivityBadge(c.id, {
+                callStatus,
+                callParticipants,
+                chessGames,
+                summons,
+                backseat: backseatActive,
+              })}
+              // Phase 18/19: the rail avatar opens the in-app chat (the new
+              // primary surface), not the read-only character profile.
+              onClick={() => navigate({ kind: 'chat', characterId: c.id })}
+              theme={theme}
+              setHover={setHoverTip}
+            />
+          ))}
+          {/* Hidden once the party is full (260731b), which reverts the 260728
+              "always rendered" rule. That rule was written for a real bug — the
+              button vanished in states where the COUNTED set and the VISIBLE
+              roster disagreed, so it read as broken rather than as full — and it
+              paid for discoverability with a dead-end click and a dialog.
+
+              The two sets cannot disagree here: sortedCharacters IS
+              homeCharacters capped at MAX_COMPANION_SLOTS, so the moment the
+              count reaches the cap the rail is showing exactly that many
+              circles. A full rail with no + is then self-explanatory, which the
+              button plus an apology never was. chars:save remains the
+              authoritative backstop, and the World tab's slots indicator still
+              spells out "Party full" in words. */}
+          {homeCharacters.length < MAX_COMPANION_SLOTS ? (
+            <button
+              type="button"
+              className={`${styles.circleButton} ${view.kind === 'awaken' || view.kind === 'add-character' ? styles.circleActive : ''}`}
+              onClick={() => navigate({ kind: 'awaken' })}
+              aria-label={t('Awaken a companion')}
+              onMouseEnter={(e) => attachHover(e.currentTarget, t('Awaken'), setHoverTip)}
+              onMouseLeave={() => setHoverTip(null)}
+              onFocus={(e) => attachHover(e.currentTarget, t('Awaken'), setHoverTip)}
+              onBlur={() => setHoverTip(null)}
+            >
+              <PlusIcon size={18} />
+            </button>
+          ) : null}
+        </div>
+
+        <div className={styles.spacer} />
+
+        <div className={styles.cluster}>
+          {/* 260725: three-state. UNKNOWN (null) renders NEITHER button — the
+              rail must never claim a mode main hasn't reported (a guessed
+              "Switch to cloud" here painted BYOK over live cloud billing). */}
+          {aiBackendKind === 'cloud-proxy' ? (
+            <RailButton
+              active={view.kind === 'credits'}
+              onClick={() => navigate({ kind: 'credits' })}
+              title={usageKnown ? t('Usage: {pct}%', { pct: Math.max(0, Math.min(100, Math.round(usagePct))) }) : t('Plan')}
+              setHover={setHoverTip}
+            >
+              <StarIcon size={22} />
+            </RailButton>
+          ) : aiBackendKind === 'local' ? (
+            <RailButton
+              onClick={handleCloudClick}
+              title={t('Switch to cloud')}
+              setHover={setHoverTip}
+            >
+              {/* Same StarIcon as the cloud-proxy branch — consistent rail
+                  iconography; only the click target differs (local → the
+                  "Switch to cloud?" prompt). */}
+              <StarIcon size={22} />
+            </RailButton>
+          ) : null}
+          <RailButton
+            active={view.kind === 'settings'}
+            onClick={() => navigate({ kind: 'settings' })}
+            title={t('Settings')}
+            setHover={setHoverTip}
+          >
+            <SettingsIcon size={22} />
+          </RailButton>
+        </div>
+
+        {/* 261023: "Update Sei", full-bleed at the rail's foot while an update
+            is downloading (quiet bar) or ready (the gradient button). Renders
+            nothing otherwise. */}
+        <UpdateRailButton setHover={setHoverTip} />
+      </nav>
+
+      {/*
+        Single shared floating tooltip. Lives outside the rail so it isn't
+        clipped by .avatarCluster's overflow-y: auto (CSS forces overflow-x
+        to clip when overflow-y is auto/scroll, so position:absolute children
+        of the cluster were getting truncated on the right). position:fixed
+        anchors to the viewport; we drop it ~88px from the left edge (rail
+        width 80 + 8px gap) so the visual offset matches every button.
+      */}
+      {hoverTip ? (
+        <div
+          className={styles.railTooltipFloat}
+          role="tooltip"
+          style={{ top: hoverTip.y }}
+        >
+          {hoverTip.label}
+        </div>
+      ) : null}
+
+      {showCloudPrompt ? (
+        <ModalShell
+          title={t('Switch to cloud?')}
+          onClose={() => setShowCloudPrompt(false)}
+          scrimClose
+        >
+          <p className={styles.cloudPromptBody}>
+            {t("Sign in to use Sei's hosted AI. You keep your local characters either way.")}
+          </p>
+          <ModalFooter>
+            <Button kind="quiet" size="md" onClick={() => setShowCloudPrompt(false)}>
+              {t('Not now')}
+            </Button>
+            <Button
+              kind="primary"
+              size="md"
+              onClick={() => {
+                setShowCloudPrompt(false);
+                setShowSignIn(true);
+                // Once sign-in lands, the effect above flips us to cloud.
+                setPendingCloudAfterSignIn(true);
+              }}
+            >
+              {t('Continue')}
+            </Button>
+          </ModalFooter>
+        </ModalShell>
+      ) : null}
+
+      {showSignIn ? (
+        <SignInModal
+          framingLabel={null}
+          onClose={() => setShowSignIn(false)}
+        />
+      ) : null}
+
+      {/* Signed-in BYOK → cloud switch (no sign-in re-prompt). Same confirm
+          modal Settings uses; on confirm we flip the backend live + land on
+          the Playtime/credits screen. */}
+      {showSwitchConfirm ? (
+        <SwitchBackendConfirmModal
+          direction="cloud-proxy"
+          onCancel={() => setShowSwitchConfirm(false)}
+          onConfirm={async () => {
+            await switchToCloud();
+            setShowSwitchConfirm(false);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}

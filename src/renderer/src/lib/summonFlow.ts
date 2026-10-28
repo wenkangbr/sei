@@ -1,0 +1,247 @@
+/**
+ * Shared summon-attempt flow, per game (game adapters M0, 260908).
+ *
+ * Every summon entry point (a launch panel's Launch button, crash-modal
+ * re-summons, the setup-modal retry) must run the same gates in the same
+ * order. `summonFlows[game]` holds one flow per bot-backed game, all sharing
+ * `launchSummon` (the summon itself + post-summon navigation):
+ *
+ *   - minecraft: the pre-M0 pipeline, unchanged — the username-conflict guard,
+ *     then the LAN gate: if connected, summon (behind the host-compatibility
+ *     disclaimer); otherwise stash the pending id and open the Minecraft setup
+ *     window on its "Connecting to world" tab in searching mode, which
+ *     auto-resumes the summon when LAN flips to connected (McSetupModal, D-56).
+ *   - default (stardew, dontstarve): check the game's world state via
+ *     world:check-now; if open, summon; else stash the pending id + game and
+ *     open the generic per-game setup modal ({kind:'game-setup', game}), which
+ *     auto-resumes when world:state flips open. A game agent that needs its
+ *     own gates registers a flow with `registerSummonFlow`.
+ *
+ * Centralised here (rather than duplicated per screen) so the gate order
+ * lives in one place. The old first-summon skin-setup nudge moved to the
+ * first OPEN of the Minecraft surface (maybeOfferSkinSetup in gameLaunch.ts,
+ * 260725) — by the time a summon fires the user has already been offered
+ * setup.
+ */
+
+import { sei } from './ipcClient';
+import { effectiveMcUsername } from '@shared/characterSchema';
+import { lanHostWarning, summonBlockedProps, type LanHost, type LanHostWarning } from '@shared/ipc';
+import type { GameId } from '@shared/gameIpc';
+import { useUiStore } from './stores/useUiStore';
+import { useDataStore } from './stores/useDataStore';
+import { useMcDashboardStore } from './stores/useMcDashboardStore';
+
+/**
+ * 260709 — pre-summon host-compatibility disclaimer bookkeeping. Session-scoped
+ * on purpose: the disclaimer is a heads-up, not a gate, so once the user has
+ * seen (and summoned past) it for a given warning kind we stay quiet until the
+ * next app launch. Not persisted — a modded world is worth one reminder per
+ * session, zero per click.
+ */
+const acknowledgedHostWarnings = new Set<LanHostWarning>();
+
+/** Called by the disclaimer's "Summon anyway" so this session stops asking. */
+export function acknowledgeHostWarning(kind: LanHostWarning): void {
+  acknowledgedHostWarnings.add(kind);
+}
+
+/**
+ * The summon itself + post-summon navigation. Shared by every flow and the
+ * disclaimer modal's "Summon anyway" resume.
+ */
+export function launchSummon(id: string, fromChat: boolean, game: GameId = 'minecraft'): void {
+  // 260725: the dashboard's runtime controls (pause + reactive/proactive) are
+  // per-summon state. Drop any leftovers from a previous session here — the
+  // fresh bot process always starts unpaused and proactive, and a stale
+  // renderer "paused" flag would misreport it.
+  useMcDashboardStore.getState().reset(id);
+  void sei.summon(id, game).catch(() => {
+    // Errors surface via onStatus → BotStatus.error; the model row owns display.
+  });
+  useUiStore.getState().navigate(fromChat ? { kind: 'chat', characterId: id } : { kind: 'character', id });
+}
+
+/**
+ * Summon behind the host-compatibility disclaimer. If the detected host
+ * warrants a warning the user has not yet acknowledged this session, open the
+ * disclaimer modal (which resumes via launchSummon on "Summon anyway");
+ * otherwise summon straight away. Used by both the direct summon path
+ * (the Minecraft flow) and the McSetupModal auto-resume, so neither can skip
+ * the gate.
+ *
+ * 260721: the vanilla and modded warnings carry a persisted "Don't show this
+ * again" (config.hide_vanilla_host_warning / hide_modded_host_warning); a
+ * suppressed warning summons straight away. The config read is best-effort:
+ * if it fails we fall back to showing the warning (it never blocks anything,
+ * so over-showing is the safe failure).
+ */
+export async function summonWithHostGate(
+  id: string,
+  fromChat: boolean,
+  host: LanHost | undefined,
+): Promise<void> {
+  const warning = lanHostWarning(host);
+  // 260929: a Forge/NeoForge host is a hard stop, not a heads-up. It is never
+  // acknowledged or suppressed ("Don't show this again" for the old modded
+  // warning does not cover it) and the modal has no "Summon anyway".
+  // Same decision as forgeHostBlock, the check main's pre-gate and the chat
+  // launch() tool use; weak evidence lands in the soft 'modded' warning below.
+  if (warning === 'forge' && host) {
+    // One summon_blocked per refused click (the chat and voice launch() tool
+    // fire their own in main; this path never reaches the supervisor, so the
+    // attempt is not also counted as a summon_failed).
+    try { sei.track('summon_blocked', summonBlockedProps(id, host, 'button')); } catch { /* analytics is never load-bearing */ }
+    useUiStore.getState().openModal({ kind: 'lan-host-warning', characterId: id, warning, host, fromChat });
+    return;
+  }
+  if (warning && host && !acknowledgedHostWarnings.has(warning)) {
+    let suppressed = false;
+    if (warning === 'vanilla' || warning === 'modded') {
+      const cfg = await sei.getConfig().catch(() => null);
+      suppressed =
+        warning === 'vanilla'
+          ? cfg?.hide_vanilla_host_warning === true
+          : cfg?.hide_modded_host_warning === true;
+    }
+    if (!suppressed) {
+      useUiStore.getState().openModal({ kind: 'lan-host-warning', characterId: id, warning, host, fromChat });
+      return;
+    }
+  }
+  launchSummon(id, fromChat, 'minecraft');
+}
+
+/**
+ * Multi-summon guard. Two bots cannot share an in-game username — the world
+ * kicks the second with `multiplayer.disconnect.name_taken`. If a
+ * currently-summoned (online or connecting) character already uses the target's
+ * effective MC username, open the conflict popup and return true (refuse). The
+ * supervisor has an authoritative backstop for the click-twice race; this is
+ * the user-facing surface on the common path. Case-insensitive to match MC.
+ */
+function blockedByUsernameConflict(id: string): boolean {
+  const { characters, summons } = useDataStore.getState();
+  const target = characters.find((c) => c.id === id);
+  if (!target) return false;
+  const targetName = effectiveMcUsername(target).toLowerCase();
+  const conflict = characters.find((c) => {
+    if (c.id === id) return false;
+    const st = summons[c.id];
+    if (st?.kind !== 'online' && st?.kind !== 'connecting') return false;
+    // Only a Minecraft session shares the world (and its name space).
+    if ((st.game ?? 'minecraft') !== 'minecraft') return false;
+    return effectiveMcUsername(c).toLowerCase() === targetName;
+  });
+  if (!conflict) return false;
+  useUiStore.getState().openModal({
+    kind: 'summon-conflict',
+    attemptedName: target.name,
+    conflictName: conflict.name,
+    username: effectiveMcUsername(target),
+  });
+  return true;
+}
+
+/** Was this summon launched from the character's OWN chat (Task 6)? */
+function launchedFromChat(id: string): boolean {
+  const view = useUiStore.getState().view;
+  return view.kind === 'chat' && view.characterId === id;
+}
+
+/**
+ * Run the LAN gate and summon (Minecraft). Always navigates to the character
+ * page on the connected path — harmless when the caller is already on that
+ * page (CharacterPage) and matches the CharactersScreen card behavior.
+ */
+async function proceedMinecraftSummon(id: string): Promise<void> {
+  const ui = useUiStore.getState();
+  // 260703: gate on a FRESH LAN read, not the store snapshot. The background
+  // poll damps open→closed transitions (OPEN_MISS_TOLERANCE), so a world that
+  // actually closed can keep reporting 'open' in the store for up to ~4s — long
+  // enough that a summon click would fire sei.summon(id) into a dead port and
+  // surface a connection error instead of the "open your world" setup window.
+  // The fresh check reads live ground truth; fall back to the store snapshot if
+  // the IPC fails. (A false 'closed' here self-heals: McSetupModal auto-resumes
+  // the pending summon when the next poll flips back to open.) checkNow also
+  // refreshes main's cached LAN state, so the port the actual summon reads is
+  // fresh too.
+  const lan = await sei.lanCheckNow().catch(() => useDataStore.getState().lan);
+  // Task 6 — if this summon was launched from THIS character's chat (the games
+  // popup opens over the chat view), keep the user in that chat once the bot
+  // joins rather than yanking them to the profile page. The floating widget +
+  // summon toast still surface the live session from anywhere.
+  const fromChat = launchedFromChat(id);
+  if (lan.kind === 'open') {
+    // 260709 — compatibility disclaimer: a vanilla (no skin mod), modded, or
+    // Lunar host gets a one-time heads-up before the first summon of the
+    // session. The modal's "Summon anyway" acknowledges and resumes via
+    // launchSummon; Cancel simply drops the attempt.
+    await summonWithHostGate(id, fromChat, lan.host);
+    return;
+  }
+  ui.setPendingSummon(id);
+  ui.setPendingSummonGame('minecraft');
+  // Remember the origin so the McSetupModal auto-resume lands back in chat too.
+  ui.setPendingSummonReturnToChat(fromChat);
+  // Launch-blocked path: the Minecraft setup window, "Connecting to world"
+  // tab, WITH the searching animation (the only path that shows it).
+  ui.openModal({ kind: 'mc-setup', tab: 'world', searching: true });
+}
+
+/** One summon pipeline per bot-backed game. */
+export interface SummonFlow {
+  /** Run every gate, then summon or park the attempt behind a setup modal. */
+  attempt(id: string): Promise<void>;
+}
+
+/** The Minecraft pipeline: the username-conflict guard, then the LAN gate. */
+const minecraftFlow: SummonFlow = {
+  async attempt(id) {
+    // Refuse + popup if this character's in-game name collides with a live one.
+    if (blockedByUsernameConflict(id)) return;
+    await proceedMinecraftSummon(id);
+  },
+};
+
+/**
+ * The generic pipeline for any other bot-backed game: a fresh world check,
+ * summon if open, else park behind the per-game setup modal. A game agent
+ * that needs more (its own name guard, an install gate) registers its own.
+ */
+export function makeDefaultSummonFlow(game: GameId): SummonFlow {
+  return {
+    async attempt(id) {
+      const ui = useUiStore.getState();
+      const world = await sei.worldCheckNow(game).catch(() => useDataStore.getState().worlds[game] ?? null);
+      const fromChat = launchedFromChat(id);
+      if (world?.kind === 'open') {
+        launchSummon(id, fromChat, game);
+        return;
+      }
+      ui.setPendingSummon(id);
+      ui.setPendingSummonGame(game);
+      ui.setPendingSummonReturnToChat(fromChat);
+      ui.openModal({ kind: 'game-setup', game });
+    },
+  };
+}
+
+export const summonFlows: Record<GameId, SummonFlow> = {
+  minecraft: minecraftFlow,
+  stardew: makeDefaultSummonFlow('stardew'),
+  dontstarve: makeDefaultSummonFlow('dontstarve'),
+};
+
+/** Replace a game's flow (the game agents' seam). */
+export function registerSummonFlow(game: GameId, flow: SummonFlow): void {
+  summonFlows[game] = flow;
+}
+
+/**
+ * Entry point for a summon attempt into `game` (default Minecraft): runs that
+ * game's flow ({@link summonFlows}).
+ */
+export async function attemptSummon(id: string, game: GameId = 'minecraft'): Promise<void> {
+  await summonFlows[game].attempt(id);
+}

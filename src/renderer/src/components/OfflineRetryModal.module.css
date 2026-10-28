@@ -1,0 +1,16 @@
+/* OfflineRetryModal (260610) — content styles only; scrim, panel, title, footer
+   and animation come from ModalShell. */
+.body {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+.errorText {
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--red);
+  margin: 0;
+}

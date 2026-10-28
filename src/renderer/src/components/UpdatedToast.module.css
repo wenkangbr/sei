@@ -1,0 +1,87 @@
+/* UpdatedToast: top-right "Updated to vX" card, under the header row so it
+ * covers neither the header buttons nor the chat composer. Tokens only
+ * (no hex literals), same surface treatment as MiniTile. The green left edge
+ * echoes the "Update Sei" button it follows. */
+
+.card {
+  position: fixed;
+  right: 14px;
+  top: calc(var(--space-3xl) + var(--space-md));
+  /* Above the MiniTile return card (600), below every ModalShell tier (1000+). */
+  z-index: 700;
+  width: 280px;
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-md);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  background: var(--bg2);
+  border-left: 3px solid var(--green);
+  box-shadow: var(--shadow-pop);
+  animation: toast-in 240ms var(--ease-pop);
+}
+
+.text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.title {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.body {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.4;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.close:hover {
+  color: var(--text);
+}
+
+.close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    animation: none;
+  }
+}

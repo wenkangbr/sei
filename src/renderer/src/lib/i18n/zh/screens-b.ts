@@ -1,0 +1,422 @@
+/** Filled by the localization sweep. See ../zh.ts for the dictionary rules. */
+export const ZH_SCREENS_B: Record<string, string> = {
+  // ── SettingsScreen ────────────────────────────────────────────────
+  'Profile': '个人资料',
+  'Your name': '你的名字',
+  'Name': '名字',
+  'Account': '账户',
+  'Email': '邮箱',
+  'Sign out': '退出登录',
+  'Sending…': '发送中…',
+  // 260804 — the row opens the code modal (which sends on mount) instead of
+  // resending a link, so this screen no longer owns any send-status copy.
+  'Verify email': '验证邮箱',
+  'Enter code': '输入验证码',
+  'Account ID': '账户 ID',
+  'Copy account ID': '复制账户 ID',
+  'Copied': '已复制',
+  'Copy': '复制',
+  'Companion preferences': '伙伴偏好',
+  'Update my preferences': '更新我的偏好',
+  'Bring companions from this computer': '从这台电脑带来伙伴',
+  'Bring over': '带过来',
+  'Migrate local companions': '迁移本地伙伴',
+  'Migrate': '迁移',
+  'Export data': '导出数据',
+  'Export as JSON': '导出为 JSON',
+  'Saved to {path}': '已保存到 {path}',
+  "Couldn't prepare your export. Try again in a moment.": '无法准备导出文件，请稍后再试。',
+  'AI': 'AI',
+  'Backend': '后端',
+  'About the AI backend': '关于 AI 后端',
+  'Switching to your own API key turns off managed billing and routes Sei through the key stored on this device. Your subscription keeps renewing until you cancel it.':
+    '切换到你自己的 API 密钥会关闭托管计费，并让 Sei 使用保存在本设备上的密钥。你的订阅会持续续费，直到你取消为止。',
+  'Cloud turns off your local API key and routes Sei through our managed cloud. Switch back any time.':
+    '云端模式会停用你本地的 API 密钥，让 Sei 通过我们的托管云端运行。随时可以切换回来。',
+  'Cloud': '云端',
+  'My key': '我的密钥',
+  'Switched. Your running bot now routes through Sei’s managed cloud.':
+    '已切换。你正在运行的机器人现在通过 Sei 的托管云端运行。',
+  'Switched. Your running bot now uses your own API key.':
+    '已切换。你正在运行的机器人现在使用你自己的 API 密钥。',
+  'Provider': '模型提供商',
+  'API key': 'API 密钥',
+  'Not set': '未设置',
+  'Update': '更新',
+  'Set': '设置',
+  'API key cannot be empty.': 'API 密钥不能为空。',
+  'Failed to save key. Try again.': '密钥保存失败，请重试。',
+  'Failed to save. Try again.': '保存失败，请重试。',
+  'Failed to save provider. Try again.': '提供商保存失败，请重试。',
+  'ElevenLabs key': 'ElevenLabs 密钥',
+  'About the ElevenLabs key': '关于 ElevenLabs 密钥',
+  "sorry :( i'm working to support other voice models. for now, tts only supports elevenlabs.":
+    '抱歉 :( 我们正在努力支持其他语音模型。目前语音合成只支持 ElevenLabs。',
+  'Your ElevenLabs key': '你的 ElevenLabs 密钥',
+  'Your own ElevenLabs voices show up in the voice picker once your key is saved.':
+    '保存密钥后，你自己的 ElevenLabs 声音会出现在声音选择器中。',
+  // 261020 (T158): the optional ElevenLabs key for Sei Cloud accounts.
+  'Use your own ElevenLabs voices': '使用你自己的 ElevenLabs 声音',
+  "Optional. Only needed for voices from your own ElevenLabs account, like a clone of your voice. Those voices use your ElevenLabs credits. Sei's voices are included in your plan.":
+    '可选。只有使用你自己 ElevenLabs 账户里的声音（例如克隆的你自己的声音）时才需要。这些声音会消耗你的 ElevenLabs 额度。Sei 的声音已包含在你的套餐中。',
+  "Only for voices in your own ElevenLabs account. Sei's voices and voice recognition keep running on Sei Cloud and never use this key.":
+    '仅用于你自己 ElevenLabs 账户里的声音。Sei 的声音和语音识别继续通过 Sei Cloud 运行，不会使用这个密钥。',
+  'Remove': '移除',
+  'Key cannot be empty.': '密钥不能为空。',
+  'Failed to remove key. Try again.': '密钥移除失败，请重试。',
+  'Voice recognition': '语音识别',
+  'ElevenLabs Scribe': 'ElevenLabs Scribe',
+  'Local Whisper': '本地 Whisper',
+  'Offline. Downloads a small model on first call.':
+    '离线运行。首次通话时会下载一个小模型。',
+  'Better accuracy. Uses your ElevenLabs key.': '识别更准确。使用你的 ElevenLabs 密钥。',
+  'Minecraft': 'Minecraft',
+  'Custom skins': '自定义皮肤',
+  'About custom skins': '关于自定义皮肤',
+  'Give your companion a Minecraft skin so it looks right in your world. This runs a quick one-time setup for your Minecraft install.':
+    '给你的伙伴一个 Minecraft 皮肤，让它在你的世界里有正确的外观。这会为你的 Minecraft 安装做一次快速的一次性设置。',
+  'Re-run setup': '重新运行设置',
+  'Run setup': '运行设置',
+  'Visual gameplay': '视觉游玩',
+  'About visual gameplay': '关于视觉游玩',
+  "Companions usually play from lightweight snapshots of the world, but can pull a full render of what's around them when they need to see it, for example when building or navigating.":
+    '伙伴通常通过轻量的世界快照来游玩，但在需要看清周围时（例如建造或寻路），可以获取周围环境的完整渲染。',
+  'Visual gameplay mode': '视觉游玩模式',
+  'Off': '关闭',
+  'On-demand': '按需',
+  'Continuous': '持续',
+  'Theme': '主题',
+  'Midnight': '午夜',
+  'Ice': '冰蓝',
+  'Acorn': '橡果',
+  'Mint': '薄荷',
+  'Background': '背景',
+  'About custom backgrounds': '关于自定义背景',
+  'Shows your own picture behind the app, under the theme colors. Use the sliders to blend it in.':
+    '在应用背后、主题颜色之下显示你自己的图片。用滑块调整让它融入界面。',
+  'Background visibility': '背景可见度',
+  'Background brightness': '背景亮度',
+  'Appearance': '外观',
+  'Realistic typing': '拟真打字',
+  'About realistic typing': '关于拟真打字',
+  'Pauses to read your message, then paces typing to a human speed, in chat and in-game. Off replies instantly.':
+    '会先停下来阅读你的消息，再以接近真人的速度打字，聊天和游戏内都生效。关闭后会立即回复。',
+  'Developer console': '开发者控制台',
+  'About the developer console': '关于开发者控制台',
+  'Useful for debugging skin and bot issues.': '用于调试皮肤和机器人问题。',
+  'Show developer console': '显示开发者控制台',
+  'Usage analytics': '使用情况分析',
+  'About usage analytics': '关于使用情况分析',
+  'Shares anonymous usage data (feature counts, versions, errors) to help improve Sei. Never your chats, characters, or personal info. Turn off any time.':
+    '分享匿名使用数据（功能使用次数、版本、错误）来帮助改进 Sei。绝不包含你的聊天、角色或个人信息。可随时关闭。',
+  'Call captions': '通话字幕',
+  'About call captions': '关于通话字幕',
+  'Shows live captions during voice calls: what the companion said and what Sei heard you say.':
+    '在语音通话中显示实时字幕：伙伴说了什么，以及 Sei 听到你说了什么。',
+  // Avatar overlay (260804, grew out of the 260706 call overlay setting)
+  'About the avatar': '关于虚拟形象',
+  'Floats your companion on top of every app: their picture, or a Live2D model from their profile. "When active" shows it during calls, games, screensharing and Minecraft; "Always" keeps it up while Sei is open. Hover it to move or resize.':
+    '把伙伴悬浮显示在所有应用之上：可以是他们的头像，也可以是角色页里设置的 Live2D 模型。「活动时」在通话、游戏、屏幕分享和 Minecraft 期间显示；「一直显示」则只要 Sei 开着就一直显示。鼠标悬停可以移动和调整大小。',
+  'When active': '活动时',
+  'Always': '一直显示',
+  'Conversation starters': '主动开启话题',
+  'About conversation starters': '关于主动开启话题',
+  'When a voice call goes quiet for a bit, your companion can bring up a topic on their own instead of waiting for you to speak.':
+    '当语音通话安静了一会儿，你的伙伴可以自己开启一个话题，而不是等你先开口。',
+  'About': '关于',
+  'Version': '版本',
+  'Check now': '立即检查',
+  'checking…': '检查中…',
+  'up to date': '已是最新',
+  'update available': '有可用更新',
+  'check failed': '检查失败',
+  'Advanced updates': '抢先更新',
+  // 260909 Search group
+  'Search': '搜索',
+  // 261023: web search moved into the Games group, renamed for both.
+  'Games & search': '游戏与搜索',
+  'Web search': '网页搜索',
+  'Companions can look things up on the web while you chat or play. This works out of the box for free. Add your own search API key only if lookups keep failing.':
+    '伙伴在聊天或游戏时可以上网查资料。默认免费可用，无需设置。只有在查询经常失败时，才需要添加你自己的搜索 API 密钥。',
+  'About search providers': '关于搜索提供方',
+  'Auto uses free public search with no account. Brave, Tavily and Serper need an API key from their website; each has a free tier.':
+    '自动模式使用免费的公共搜索，无需账户。Brave、Tavily 和 Serper 需要在其官网申请 API 密钥，均有免费额度。',
+  'Search provider': '搜索提供方',
+  'Auto (free)': '自动（免费）',
+  'Search API key': '搜索 API 密钥',
+  'Paste your key': '粘贴你的密钥',
+  'Clear': '清除',
+  'Without a key, search falls back to the free providers.': '未设置密钥时，搜索会回退到免费提供方。',
+  'About advanced updates': '关于抢先更新',
+  'Get beta releases early, before they roll out to everyone. Betas are less tested and may have rough edges. Leave this off for the stable version.':
+    '在向所有人推送之前抢先获得测试版。测试版测试较少，可能不够完善。想用稳定版就保持关闭。',
+  'Terms of Service': '服务条款',
+  'Privacy Policy': '隐私政策',
+  'Open': '打开',
+  'Report copyright infringement (DMCA)': '举报版权侵权（DMCA）',
+  'Photo credits: Minecraft artwork by Mojang Studios. Movie night photo by':
+    '图片来源：Minecraft 美术作品来自 Mojang Studios。电影之夜照片来自',
+  '(CC licensed).': '（CC 许可）。',
+  'Speech recognition: SenseVoice-Small by FunAudioLLM (Alibaba),':
+    '语音识别：SenseVoice-Small，来自 FunAudioLLM（阿里巴巴），',
+  'FunASR Model License': 'FunASR 模型许可证',
+  '. English voice: trained on LibriTTS-R,': '。英文语音：基于 LibriTTS-R 训练，',
+  ', via Piper; converted to ONNX. Chinese voice: trained on AISHELL-3 by Beijing Shell Shell Technology,':
+    '，经由 Piper；已转换为 ONNX。中文语音：基于北京希尔贝壳科技的 AISHELL-3 训练，',
+  'Apache License 2.0': 'Apache 2.0 许可证',
+  ', via icefall.': '，经由 icefall。',
+  'Danger': '危险操作',
+  'Reset all companion memories': '重置所有伙伴的记忆',
+  'All memories reset': '已重置所有记忆',
+  'Resetting {done} of {total}…': '正在重置 {done}/{total}…',
+  'Reset all memories…': '重置所有记忆…',
+  'Wipes saved chat history and playtime for every companion on this device. Persona, portrait, and skin are kept.':
+    '清除本设备上每个伙伴已保存的聊天记录和游玩时长。人设、头像和皮肤会保留。',
+  'Failed to reset some memories.': '部分记忆重置失败。',
+  'Delete account': '删除账户',
+  'Delete account…': '删除账户…',
+  'Permanently deletes your cloud data within 30 days. Local files stay.':
+    '将在 30 天内永久删除你的云端数据。本地文件保留。',
+  'Factory reset': '恢复出厂设置',
+  'Factory reset…': '恢复出厂设置…',
+  'Erases everything on this device and restarts Sei like a fresh install. Cloud data stays on your account.':
+    '抹除本设备上的所有内容，并像全新安装一样重启 Sei。云端数据仍保留在你的账户中。',
+
+  // ── CreditsScreen ─────────────────────────────────────────────────
+  'Unused weekly credits do not carry over. Extra credits never expire.':
+    '未用完的每周额度不会结转。额外额度永不过期。',
+  'Sign in to manage billing.': '请登录后管理账单。',
+  'No billing to manage yet. Subscribe or top up first.': '还没有可管理的账单。请先订阅或充值。',
+  'Could not open billing. Please try again.': '无法打开账单页面，请重试。',
+  'Sign in to change your plan.': '请登录后更改套餐。',
+  'Too many requests. Wait a moment and try again.': '请求过于频繁，请稍后再试。',
+  'Could not change your plan. Please try again.': '无法更改套餐，请重试。',
+  'Usage': '用量',
+  'Refresh': '刷新',
+  'Refresh plan usage': '刷新套餐用量',
+  '{name} plan': '{name} 套餐',
+  "Couldn't check your account. Refresh to try again.": '无法查询你的账户。请刷新重试。',
+  'Resets in {time}': '{time} 后重置',
+  // 260926: under the free-play reset line when the allowance is spent.
+  'To keep playing before then, top up or pick a plan below.':
+    '想在那之前继续玩，可以充值或在下方选择套餐。',
+  'Extra credits': '额外额度',
+  '{used}/{total} credits used': '已使用 {used}/{total} 额度',
+  'Top up': '充值',
+  'Plan': '套餐',
+  // 'Resume' lives in games.ts ('恢复'): shared with the Draw! pause overlay.
+  'Current plan': '当前套餐',
+  'Opening…': '正在打开…',
+  'Downgrade': '降级',
+  'Upgrade': '升级',
+  // 261023: the plan card buttons ({name} is the plan name, e.g. Party).
+  'Get {name}': '开通 {name}',
+  'Upgrade to {name}': '升级到 {name}',
+  'Resume {name}': '恢复 {name}',
+  'Recommended': '推荐',
+  'Your {name} plan will not renew. It ends {date}.': '你的 {name} 套餐将不再续费，于 {date} 结束。',
+  'Your {name} plan will not renew.': '你的 {name} 套餐将不再续费。',
+  'Your {name} plan renews on {date}.': '你的 {name} 套餐将于 {date} 续费。',
+  'Your last payment did not go through. Update your card in Manage billing.':
+    '你上次的付款未成功。请在「管理账单」中更新你的银行卡。',
+  'Manage billing': '管理账单',
+  'Submit feedback': '提交反馈',
+  'Inbox': '收件箱',
+  'Inbox ({n})': '收件箱（{n}）',
+  'Confirm your plan change': '确认更改套餐',
+  'Confirm plan change': '确认套餐更改',
+  '{name} is {amount} per month, billed through Polar. It renews automatically until you cancel.':
+    '{name} 为每月 {amount}，通过 Polar 计费。将自动续费，直到你取消为止。',
+  'The change takes effect right away. Your card on file is charged now, prorated for the time left in your current billing period. After that you pay {amount} each month.':
+    '更改立即生效。将立刻从你已绑定的银行卡扣款，按当前计费周期剩余时间按比例计算。之后每月支付 {amount}。',
+  'The change takes effect right away. Polar prorates the difference against your card on file for the time left in your current billing period. After that you pay {amount} each month.':
+    '更改立即生效。Polar 会按当前计费周期剩余时间，把差额按比例结算到你已绑定的银行卡。之后每月支付 {amount}。',
+  'You can cancel anytime from Manage billing.': '你可以随时在「管理账单」中取消。',
+  'extra credits': '额外额度',
+  'your plan': '你的套餐',
+  'Resume your subscription': '恢复你的订阅',
+  'Updating your plan': '正在更新你的套餐',
+  'Complete your purchase': '完成购买',
+  'Subscription resumed': '订阅已恢复',
+  'Plan updated': '套餐已更新',
+  'Purchase complete': '购买完成',
+  'Still processing': '仍在处理中',
+  'Resume subscription status': '恢复订阅状态',
+  'Checkout status': '结账状态',
+  "Resume your {product} subscription in your browser. This screen updates automatically once it's confirmed.":
+    '请在浏览器中恢复你的 {product} 订阅。确认后此页面会自动更新。',
+  "Applying your {product} plan. This screen updates automatically once it's confirmed.":
+    '正在应用你的 {product} 套餐。确认后此页面会自动更新。',
+  'Finish checking out for {product} in your browser. This screen updates automatically once the payment is confirmed.':
+    '请在浏览器中完成 {product} 的结账。付款确认后此页面会自动更新。',
+  'Your {product} subscription will continue, with no end date.':
+    '你的 {product} 订阅将继续，没有结束日期。',
+  'Your extra credits are now available.': '你的额外额度现在可用了。',
+  'Your {product} plan is active.': '你的 {product} 套餐已生效。',
+  'This is taking longer than usual. You can close this; it will update here automatically once it completes.':
+    '处理时间比平常长。你可以关闭此窗口，完成后这里会自动更新。',
+
+  // ── ReceiptScreen ─────────────────────────────────────────────────
+  'Welcome to {name}!': '欢迎使用 {name}！',
+  '{amount} charged today.': '今日已扣款 {amount}。',
+  'Billed monthly until you cancel.': '按月计费，直到你取消为止。',
+  'Next billing date: {date}.': '下次扣款日期：{date}。',
+  'in 30 days': '30 天后',
+  'Cancel anytime in Settings → Cloud AI → Cancel subscription.':
+    '可随时在「设置 → 云端 AI → 取消订阅」中取消。',
+  'Back to Sei': '返回 Sei',
+
+  // ── SkinSetupScreen ───────────────────────────────────────────────
+  'Set up voice calls too': '同时设置语音通话',
+  'Voice module installed. You can call your companion anytime.':
+    '语音模块已安装。你可以随时给你的伙伴打电话。',
+  'Downloading the voice module… {pct}%': '正在下载语音模块… {pct}%',
+  'Download failed. You can retry from your first call.': '下载失败。你可以在第一次通话时重试。',
+  'Downloads the voice-recognition module (~40 MB) in the background.':
+    '在后台下载语音识别模块（约 40 MB）。',
+
+  // ── OnboardingScreen ──────────────────────────────────────────────
+  'What should they call you?': '他们该怎么称呼你？',
+  'Finish': '完成',
+  'Which model provider?': '选择哪个模型提供商？',
+  'Paste your {provider} API key.': '粘贴你的 {provider} API 密钥。',
+
+  // ── Companion preference questions (Sui's scenes) ────────────────
+  // The option labels shared by suiQuestions' pickers. Their old home,
+  // ProfileQuestionsScreen, was deleted 260802 along with its headings
+  // and per-option descriptions.
+  'Art style': '画风',
+  'Surprise me': '给我惊喜',
+  'Later': '以后再说',
+  'Saving…': '保存中…',
+  '1st': '第1',
+  '2nd': '第2',
+  '3rd': '第3',
+  '4th': '第4',
+  '5th': '第5',
+  'Young adult': '青年',
+  'Adult': '成年',
+  'Mature': '成熟',
+  'Elder': '年长',
+  'Timeless': '无龄',
+  'A partner in crime': '一起闯祸的搭档',
+  'Someone to look after': '需要你照顾的人',
+  'A chill friend': '一个随性的朋友',
+  'Round chibi': '圆润 Q 版',
+  'Anime': '动漫',
+  'Cel-shaded': '赛璐璐',
+  'Cartoon': '卡通',
+  '3D': '3D',
+
+  // ── UniqueGenderScreen ────────────────────────────────────────────
+  'Who are you hoping to meet?': '你希望遇见谁？',
+  'Everything else about them is a surprise, cast from your profile.':
+    '关于他们的其他一切都是惊喜，由你的偏好召唤而来。',
+  'Companion gender': '伙伴性别',
+  'Begin': '开始',
+  'Masculine': '男性',
+  'Cast a companion who presents masculine.': '召唤一位气质偏男性的伙伴。',
+  'Feminine': '女性',
+  'Cast a companion who presents feminine.': '召唤一位气质偏女性的伙伴。',
+  'Other': '其他',
+  'Let the cast decide, or beyond the binary.': '交给召唤决定，或超越二元性别。',
+
+  // ── UniqueCastingScreen ───────────────────────────────────────────
+  'Finding someone for you…': '正在为你寻找合适的人……',
+  'Seeing their face…': '正在看清 TA 的样子……',
+  "Sorting out what they'll wear…": '正在准备 TA 的装扮……',
+  'Hearing their story…': '正在听 TA 讲自己的故事……',
+  'Bringing them over…': '正在把 TA 带过来……',
+  'Sign in to continue': '请登录后继续',
+  'Meeting a unique companion needs a Sei account. Sign in and try again.':
+    '遇见独特伙伴需要 Sei 账户。请登录后重试。',
+  'Your slots are full': '你的栏位已满',
+  'Free up one of your companion slots, then cast again.': '腾出一个伙伴栏位，然后再次召唤。',
+  'That’s enough casting for today': '今天的召唤已经够多了',
+  'You’ve reached today’s limit. Come back tomorrow to meet someone new.':
+    '你已达到今日上限。明天再来认识新伙伴吧。',
+  'The cast didn’t take': '这次召唤没有成功',
+  'Something went wrong weaving your companion. Let’s try once more.':
+    '编织你的伙伴时出了问题。我们再试一次吧。',
+  'Couldn’t reach the aether': '无法连接到以太',
+  'Check your connection and try the ritual again.': '请检查网络连接，然后再次尝试仪式。',
+  'Try again': '再试一次',
+  'Casting your companion, {pct} percent': '正在召唤你的伙伴，{pct}%',
+  'Image generation failed. Continuing without a portrait.': '图像生成失败。将继续，但没有头像。',
+  'Skin generation failed. Continuing with the default skin.':
+    '皮肤生成失败。将继续使用默认皮肤。',
+
+  // ── UniqueRevealScreen ────────────────────────────────────────────
+  'Your companion is ready': '你的伙伴已就绪',
+  'They’re waiting in your party.': '他们正在你的队伍中等你。',
+  'Go home': '回到主页',
+  'Say hello': '打个招呼',
+
+  // ── 261017 (issue #46): ChatGPT plan ("Continue with ChatGPT" itself is
+  //    OpenAI's fixed button label and is never translated) ─────────────
+  'ChatGPT plan': 'ChatGPT 套餐',
+  'Use your ChatGPT plan': '使用你的 ChatGPT 套餐',
+  'Use ChatGPT plan': '使用 ChatGPT 套餐',
+  'Using ChatGPT plan': '正在使用 ChatGPT 套餐',
+  'Manage usage': '管理用量',
+  'Learn more': '了解更多',
+  'Complete eligible AI requests in this app with usage included in your ChatGPT plan or credits balance.':
+    '在此应用中完成符合条件的 AI 请求，用量计入你的 ChatGPT 套餐或额度余额。',
+  "Works on every Sei plan, including Free. Usage counts toward your ChatGPT plan, not Sei's subscription or credits.":
+    '适用于所有 Sei 方案，包括免费方案。用量计入你的 ChatGPT 套餐，不占用 Sei 的订阅或额度。',
+  'Use your ChatGPT plan?': '使用你的 ChatGPT 套餐？',
+  "Sei will stop using managed cloud credits and run your companions on your ChatGPT plan instead. ChatGPT plan usage is OpenAI's, separate from Sei's own subscription and credits. This applies to a running bot right away. Your Sei subscription, if you have one, keeps renewing until you cancel it.":
+    'Sei 将停止使用云端托管额度，改用你的 ChatGPT 套餐运行伙伴。ChatGPT 套餐用量由 OpenAI 提供，与 Sei 自己的订阅和额度分开。此更改会立即应用到正在运行的机器人。如果你有 Sei 订阅，它会继续续订，直到你取消。',
+  'ChatGPT account': 'ChatGPT 账户',
+  'About the ChatGPT plan': '关于 ChatGPT 套餐',
+  'Works on every Sei plan, including Free.': '适用于所有 Sei 方案，包括免费方案。',
+  'ChatGPT accounts': 'ChatGPT 账户列表',
+  'Add account': '添加账户',
+  'Switch': '切换',
+  'active': '当前',
+  'Signed in as {name}.': '已登录为 {name}。',
+  'Finish signing in with ChatGPT in your browser.': '请在浏览器中完成 ChatGPT 登录。',
+  'Sign in with your ChatGPT account to use your plan in Sei. No API key needed.':
+    '登录你的 ChatGPT 账户，即可在 Sei 中使用你的套餐。无需 API 密钥。',
+  'Your ChatGPT sign-in ended. Continue with ChatGPT to sign in again.':
+    '你的 ChatGPT 登录已失效。点击 Continue with ChatGPT 重新登录。',
+  'ChatGPT plan use was not turned on when you signed in, so Sei cannot use your plan yet.':
+    '登录时没有开启 ChatGPT 套餐使用权限，所以 Sei 暂时无法使用你的套餐。',
+  'Turn on ChatGPT plan': '开启 ChatGPT 套餐',
+  'Usage limit reached. Requests are paused.': '已达到用量上限，请求已暂停。',
+  "This ChatGPT account can't use its plan in Sei right now. Try another account, or pick another provider.":
+    '这个 ChatGPT 账户目前无法在 Sei 中使用其套餐。请换一个账户，或选择其他服务商。',
+  'Signed out on this device, but Sei could not confirm the sign-out with ChatGPT. To be sure, disconnect Sei in your ChatGPT settings.':
+    '已在此设备上退出登录，但 Sei 无法向 ChatGPT 确认退出。为确保安全，请在 ChatGPT 设置中断开 Sei 的连接。',
+  'Sign-in was cancelled in ChatGPT.': '已在 ChatGPT 中取消登录。',
+  'Sign-in timed out. Try again.': '登录超时，请重试。',
+  'That is a different ChatGPT account. Sign in with the same account, or add it as a new account.':
+    '这是另一个 ChatGPT 账户。请用同一个账户登录，或将它添加为新账户。',
+  'Could not reach ChatGPT. Check your connection and try again.': '无法连接 ChatGPT。请检查网络后重试。',
+  'Sei could not save your sign-in securely on this device.': 'Sei 无法在此设备上安全保存你的登录信息。',
+  'Could not open your browser. Try again.': '无法打开浏览器，请重试。',
+  'Sei could not start its sign-in listener. Try again.': 'Sei 无法启动登录监听，请重试。',
+  'Sign-in did not finish. Try again.': '登录未完成，请重试。',
+  'Sign in with ChatGPT first.': '请先登录 ChatGPT。',
+  'Turn on ChatGPT plan use first.': '请先开启 ChatGPT 套餐使用权限。',
+  "You've reached your ChatGPT plan's usage limit.": '你已达到 ChatGPT 套餐的用量上限。',
+  "This ChatGPT account can't use its plan in Sei.": '这个 ChatGPT 账户无法在 Sei 中使用其套餐。',
+  'ChatGPT plan usage limit reached': '已达到 ChatGPT 套餐用量上限',
+  "You're using your ChatGPT plan": '你正在使用 ChatGPT 套餐',
+  'Your companions now run on your ChatGPT plan. Eligible requests count toward your plan usage or credits balance, not Sei credits.':
+    '你的伙伴现在使用你的 ChatGPT 套餐运行。符合条件的请求计入你的套餐用量或额度余额，不消耗 Sei 额度。',
+  "You've used the ChatGPT plan usage available to Sei for now. Check Manage usage to see when it resets. Sei pauses ChatGPT requests until then.":
+    '你目前可供 Sei 使用的 ChatGPT 套餐用量已用完。查看「管理用量」了解何时重置。在此之前，Sei 会暂停 ChatGPT 请求。',
+  'Sign in to ChatGPT again': '重新登录 ChatGPT',
+  "ChatGPT didn't accept Sei's sign-in, even after renewing it. Sign in again to keep using your ChatGPT plan, or pick another AI option in Settings.":
+    'ChatGPT 不接受 Sei 的登录，即使已经续期也一样。请重新登录以继续使用你的 ChatGPT 套餐，或在设置中选择其他 AI 选项。',
+  'ChatGPT rejected the request': 'ChatGPT 拒绝了请求',
+  "ChatGPT didn't accept Sei's sign-in, even after renewing it. Sign in again to keep using your plan.":
+    'ChatGPT 不接受 Sei 的登录，即使已经续期也一样。请重新登录以继续使用你的套餐。',
+  "ChatGPT didn't accept Sei's last request, so ChatGPT requests are paused.":
+    'ChatGPT 不接受 Sei 的上一个请求，所以 ChatGPT 请求已暂停。',
+  "ChatGPT plan use isn't available here right now. It may be limited in your region or by your plan.":
+    '目前无法在这里使用 ChatGPT 套餐，可能受你所在地区或套餐的限制。',
+  "ChatGPT didn't accept the request Sei sent, so your companion stopped instead of retrying. Try again, or pick another AI option in Settings.":
+    'ChatGPT 不接受 Sei 发送的请求，所以你的伙伴停了下来，没有反复重试。请重试，或在设置中选择其他 AI 选项。',
+};

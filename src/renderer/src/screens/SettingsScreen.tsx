@@ -1,0 +1,2029 @@
+/**
+ * SettingsScreen — centered "Party" settings column (§4.7).
+ *
+ * Recomposed to the mockup rhythm: a 560px column of Oswald-headed groups,
+ * each row a [label | optional value | control] line with hairline borders,
+ * using the shared Seg / Toggle primitives. Every prior row + behavior is
+ * preserved:
+ *  - preferred_name ("Name") → on-blur saveConfig (commit on focus-leave).
+ *  - API key → inline "Set/Update" reveals a password field; Save persists,
+ *    re-checks hasApiKey(), collapses.
+ *  - Provider change wipes the stored key (prior key is a different vendor's).
+ *  - Backend Seg (Cloud / My key) opens SwitchBackendConfirmModal; selection
+ *    reverts on cancel because the Seg value is derived from ai_backend_kind,
+ *    which only changes after a confirmed proxyConfigure.
+ *  - Theme Seg persists theme_mode (midnight / ice / acorn / mint / system)
+ *    via saveConfig; lives in its own Theme group (above Appearance) together
+ *    with the custom background picker + sliders (260724).
+ *  - Reset-all iterates the character list; resend-verification / export /
+ *    update-check state machines unchanged; all modal opens unchanged.
+ *
+ * Source: .planning/design/UI-REDESIGN-PARTY.md §1 + §4.7.
+ */
+
+import React, { useEffect, useState } from 'react';
+import { sei } from '../lib/ipcClient';
+import { useUiStore } from '../lib/stores/useUiStore';
+import { useChatStore } from '../lib/stores/useChatStore';
+import { useAuthStore } from '../lib/stores/useAuthStore';
+import { useCreditsStore } from '../lib/stores/useCreditsStore';
+import { useDataStore } from '../lib/stores/useDataStore';
+import { applyTheme, resolvedScheme, type ThemeMode, type ThemeName } from '../lib/theme';
+import { Button } from '../components/Button';
+import { Seg } from '../components/Seg';
+import { Toggle } from '../components/Toggle';
+import { TextField } from '../components/TextField';
+import { SignOutConfirmModal } from '../components/SignOutConfirmModal';
+import { DeleteAccountModal } from '../components/DeleteAccountModal';
+import { VerifyEmailModal } from '../components/VerifyEmailModal';
+import { MigrateLocalCharsModal } from '../components/MigrateLocalCharsModal';
+import { SwitchBackendConfirmModal } from '../components/SwitchBackendConfirmModal';
+import { ResetAllMemoriesConfirmModal } from '../components/ResetAllMemoriesConfirmModal';
+import { FactoryResetConfirmModal } from '../components/FactoryResetConfirmModal';
+import { DmcaContactModal } from '../components/DmcaContactModal';
+import { ProviderSelect, type Provider } from '../components/ProviderSelect';
+import { PortraitImagePicker } from '../components/PortraitImagePicker';
+import { BackgroundImagePicker } from '../components/BackgroundImagePicker';
+import { DownloadConfirmModal, formatMb } from '../components/DownloadConfirmModal';
+import { InfoTip } from '../components/InfoTip';
+import { CopyIcon } from '../components/icons';
+import { useLangStore, useT, type UiLanguage } from '../lib/i18n';
+import { DEFAULT_MODELS } from '@shared/llmCatalog';
+import type { AvatarMode, UserConfig } from '@shared/characterSchema';
+import type { LlmListModelsResult, SpeechPackStatePush } from '@shared/ipc';
+import styles from './SettingsScreen.module.css';
+import { GamesSettingsGroup } from '../components/settings/GamesSettingsGroup';
+import { SearchSettingsSection } from '../components/settings/SearchSettingsSection';
+import { LocalImportRow } from '../components/settings/LocalImportRow';
+import { ChatgptPlanSettings } from '../components/ChatgptPlanSettings';
+import { ChatgptLinkRow } from '../components/settings/ChatgptLinkRow';
+import { chatgptReady, useChatgptStore } from '../lib/stores/useChatgptStore';
+import { pickDefaultChatgptModel } from '@shared/chatgptPlan';
+import { elevenKeySettingMode } from '../lib/voicePicker';
+
+const API_KEY_BULLET_LEN = 24;
+
+/**
+ * W5 (china-compat, 260817; zh collapsed to one pack 260908): the local TTS
+ * voice packs offered in the Voice group, in display order. Two PACKS carry
+ * the four voices — each pack contains both the female and the male speaker,
+ * so each language is one download. Ids match src/main/speech/packs.ts (the
+ * renderer never imports main); the exact byte sizes arrive per pack on the
+ * speech:pack-status push.
+ */
+const TTS_PACK_ROWS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'tts-en', label: 'English voices, female and male' },
+  { id: 'tts-zh', label: 'Chinese voices, female and male' },
+];
+
+const SENSEVOICE_PACK_ID = 'stt-sensevoice';
+
+/**
+ * Theme swatches (260724): each theme renders as a circle split diagonally
+ * between its two main colors; the name rides the shared data-tip tooltip.
+ * Literal hex is deliberate here — a swatch previews ANOTHER theme's palette,
+ * which the current theme's tokens cannot express. Keep in sync with the
+ * per-theme blocks in tokens.css (bg + accent of each).
+ */
+const THEME_SWATCHES: { value: ThemeName; label: string; colors: [string, string] }[] = [
+  { value: 'midnight', label: 'Midnight', colors: ['#04070f', '#7fb0ff'] },
+  { value: 'ice', label: 'Ice', colors: ['#f3f8ff', '#7fb0ff'] },
+  { value: 'acorn', label: 'Acorn', colors: ['#f8f3ea', '#ad8a63'] },
+  { value: 'mint', label: 'Mint', colors: ['#eff8f2', '#57b47c'] },
+];
+
+export function SettingsScreen(): React.ReactElement {
+  const navigate = useUiStore((s) => s.navigate);
+  const themeMode = useUiStore((s) => s.themeMode);
+  const setThemeMode = useUiStore((s) => s.setThemeMode);
+  // 260724 — Theme section: custom background + its two sliders. App.tsx
+  // hydrates these from persisted config; changes here write straight through
+  // (image via the user:apply/remove-background IPC, sliders via saveConfig on
+  // release so a drag doesn't spam disk writes).
+  const backgroundImage = useUiStore((s) => s.backgroundImage);
+  const backgroundOpacity = useUiStore((s) => s.backgroundOpacity);
+  const backgroundBrightness = useUiStore((s) => s.backgroundBrightness);
+  const backgroundBust = useUiStore((s) => s.backgroundBust);
+  const setBackgroundImage = useUiStore((s) => s.setBackgroundImage);
+  const setBackgroundOpacity = useUiStore((s) => s.setBackgroundOpacity);
+  const setBackgroundBrightness = useUiStore((s) => s.setBackgroundBrightness);
+  // ui-A7: developer-console toggle. Default OFF; SettingsScreen owns the
+  // surface that flips it. Persisted via UserConfig.dev_console_visible so
+  // a relaunch preserves the choice.
+  const devConsoleVisible = useUiStore((s) => s.devConsoleVisible);
+  const setDevConsoleVisible = useUiStore((s) => s.setDevConsoleVisible);
+  // App UI language (260730): its own Settings section.
+  const lang = useLangStore((s) => s.lang);
+  const setLang = useLangStore((s) => s.setLang);
+  const t = useT();
+  // Appearance & feel: "Realistic typing" pacing toggle (default ON). Persisted
+  // via UserConfig.realistic_typing; the chat store + bot read it for reading /
+  // typing delays.
+  const realisticTyping = useUiStore((s) => s.realisticTyping);
+  const setRealisticTyping = useUiStore((s) => s.setRealisticTyping);
+  // 260707: product-analytics opt-out. The toggle shows analytics ENABLED,
+  // so its `on` state is the inverse of the opt-out flag.
+  const analyticsOptOut = useUiStore((s) => s.analyticsOptOut);
+  const setAnalyticsOptOut = useUiStore((s) => s.setAnalyticsOptOut);
+  const callCaptions = useUiStore((s) => s.callCaptions);
+  const avatarMode = useUiStore((s) => s.avatarMode);
+  const convoStartersEnabled = useUiStore((s) => s.convoStartersEnabled);
+  const setAvatarMode = useUiStore((s) => s.setAvatarMode);
+  const setConvoStartersEnabled = useUiStore((s) => s.setConvoStartersEnabled);
+  const setCallCaptions = useUiStore((s) => s.setCallCaptions);
+  const authState = useAuthStore((s) => s.state);
+  // "Is ANY bot running" — gates the live backend switch. Multi-summon: true
+  // when one or more characters are connecting/online.
+  const botRunning = useDataStore((s) =>
+    Object.values(s.summons).some((st) => st.kind === 'connecting' || st.kind === 'online'),
+  );
+  // ui-A9: "Reset all character memories" iterates over the renderer's
+  // character list. refreshCharacter pulls the post-reset row back into the
+  // store so EditCharacterModal / CharacterPage observe last_launched=null
+  // + playtime_ms=0 without a manual reload.
+  const allCharacters = useDataStore((s) => s.characters);
+  const refreshCharacter = useDataStore((s) => s.refreshCharacter);
+
+  // Cloud AI toggle (PROXY-11 BYOK escape hatch). The Backend Seg drives the
+  // ai_backend_kind between cloud-proxy and local; symmetric BYOK ↔ cloud per
+  // CONTEXT D-57. Subscription cancel/manage lives on the Playtime screen →
+  // "Manage billing" (Polar portal), not here.
+  const aiBackendKind = useCreditsStore((s) => s.ai_backend_kind);
+  // 261017 (issue #46): the ChatGPT-plan sign-in (main owns the tokens).
+  const chatgptStatus = useChatgptStore((s) => s.status);
+  // WR-05 follow-up: flipping the backend mid-bot applies LIVE — main's
+  // proxy.configure handler rebuilds the running utilityProcess's Anthropic SDK
+  // in place. This notice is a positive confirmation that the swap reached the
+  // running bot; it self-clears on the next bot lifecycle transition.
+  const [switchNotice, setSwitchNotice] = useState<null | 'switched-to-cloud' | 'switched-to-local'>(
+    null,
+  );
+  // Switching cloud ⇄ local is uncommon and consequential (it changes billing
+  // and applies to a running bot immediately), so the Seg opens a confirmation
+  // modal instead of toggling directly. Non-null = modal is open for that
+  // target backend; cancelling leaves ai_backend_kind (and the Seg) untouched.
+  const [pendingSwitch, setPendingSwitch] = useState<null | 'cloud-proxy' | 'local'>(null);
+  // 261017 (issue #46): a cloud -> local switch started from "Use your
+  // ChatGPT plan" also picks the ChatGPT plan as the provider, on confirm.
+  const [switchVia, setSwitchVia] = useState<null | 'chatgpt'>(null);
+  useEffect(() => {
+    if (!botRunning) setSwitchNotice(null);
+  }, [botRunning]);
+  const confirmSwitch = async (): Promise<void> => {
+    const target = pendingSwitch;
+    if (!target) return;
+    if (target === 'local' && switchVia === 'chatgpt') {
+      // Provider first, so the running bot's live switch (and the next
+      // summon) resolve the ChatGPT plan, never the old BYOK provider.
+      const base = cfg ?? (await sei.getConfig());
+      await sei.saveConfig({ ...base, provider: 'chatgpt', provider_config: base.provider_config ?? {} });
+      setEditingKey(false);
+    }
+    await window.sei.proxyConfigure(target);
+    // 260725: re-seed the local whole-config copy so later wholesale saves
+    // from this screen carry the new backend kind, not the mount-time value.
+    // (Main also refuses renderer writes to ai_backend_kind — this keeps the
+    // copy honest, that keeps the store authoritative.)
+    void sei.getConfig().then(setCfg).catch(() => {});
+    // Refresh credits store so the icon rail (plan 13-17) reacts on next tick.
+    await useCreditsStore.getState().refresh();
+    if (botRunning) {
+      setSwitchNotice(target === 'cloud-proxy' ? 'switched-to-cloud' : 'switched-to-local');
+    }
+    setPendingSwitch(null);
+    setSwitchVia(null);
+  };
+  const [cfg, setCfg] = useState<UserConfig | null>(null);
+  const [hasKey, setHasKey] = useState<boolean>(false);
+  // Phase 18/19 — the user's chat avatar (path ref '_user.png' or null), seeded
+  // from sei.userGetProfile() on mount. PortraitImagePicker owns apply/remove
+  // via the user-profile IPC overrides below.
+  const [userPic, setUserPic] = useState<string | null>(null);
+  // The user's 4-char public handle (profiles.handle) — shown as the Account ID
+  // instead of the long Supabase UUID. Null until the profile loads / when offline.
+  const [userHandle, setUserHandle] = useState<string | null>(null);
+  // Updates section. appVersion is read once via getVersion(); updateStatus
+  // reflects live updater events while the user is on this screen. The actual
+  // update FLOW (changelog popup, download, restart) is owned by App.tsx's
+  // UpdatePopup — this section only triggers a check + surfaces inline status.
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [updateStatus, setUpdateStatus] = useState<
+    'idle' | 'checking' | 'up-to-date' | 'available' | 'error'
+  >('idle');
+  // "Advanced updates" channel. Off = stable only (the default); on = beta
+  // (pre-releases included). Seeded from config on open; persisted + pushed to
+  // the live updater on toggle. Local state, since only this screen reads it.
+  const [advancedUpdates, setAdvancedUpdates] = useState<boolean>(false);
+
+  // Inline edit buffers — typing only updates these; commit happens on blur.
+  const [preferredDraft, setPreferredDraft] = useState<string>('');
+  const [editingKey, setEditingKey] = useState<boolean>(false);
+  const [keyDraft, setKeyDraft] = useState<string>('');
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // 260725 BYOK voice: ElevenLabs API key (TTS + Scribe recognition). Same
+  // set/update/collapse rhythm as the LLM API key above; the key itself never
+  // comes back — voiceElevenKeyStatus only reports presence.
+  const [hasElevenKey, setHasElevenKey] = useState<boolean>(false);
+  const [editingElevenKey, setEditingElevenKey] = useState<boolean>(false);
+  const [elevenKeyDraft, setElevenKeyDraft] = useState<string>('');
+  const [elevenKeyError, setElevenKeyError] = useState<string | null>(null);
+
+  // ── W5 (china-compat, 260817): model picker + Test probe (local mode). ──
+  // The picker lists the selected provider's models live (llm:list-models,
+  // per-model vision verdicts + typed error tokens) and persists the choice
+  // to provider_config[provider].model — the exact field the main provider
+  // layer reads (resolveLocalModel) and the supervisor ships to the bot.
+  const [modelPickerOpen, setModelPickerOpen] = useState<boolean>(false);
+  const [modelList, setModelList] = useState<LlmListModelsResult | null>(null);
+  const [modelListLoading, setModelListLoading] = useState<boolean>(false);
+  // Test probe: idle → testing → last result. Cleared on provider/model moves.
+  const [testState, setTestState] = useState<
+    'idle' | 'testing' | { ok: true; latencyMs: number } | { ok: false; error: string }
+  >('idle');
+
+  // ── W5: local speech packs (TTS voices + SenseVoice STT). Seeded from
+  // speech:pack-status, kept live by the speech:pack-state push. ──
+  const [packStates, setPackStates] = useState<Record<string, SpeechPackStatePush>>({});
+  /** Pack awaiting the shared "Download? (XX MB)" confirm. `thenSensevoice`
+   * marks the STT flow: persist stt_engine once the download lands. */
+  const [pendingPack, setPendingPack] = useState<{
+    id: string;
+    name: string;
+    thenSensevoice?: boolean;
+  } | null>(null);
+  const [packError, setPackError] = useState<string | null>(null);
+
+  // Phase 10 (D-11) — Account panel state. Modals + transient action statuses.
+  const [signOutModalOpen, setSignOutModalOpen] = useState<boolean>(false);
+  // WR-10: capture the account email at modal-open time so the modal can
+  // remain mounted across the SIGNED_OUT transition that fires mid-flow.
+  const [deleteAccountState, setDeleteAccountState] = useState<{ email: string } | null>(null);
+  // 260728: factory reset (danger zone) confirm popup.
+  const [factoryResetOpen, setFactoryResetOpen] = useState(false);
+  // Plan 11-18 — re-open entry for the one-shot migration modal.
+  const [migrateModalOpen, setMigrateModalOpen] = useState<boolean>(false);
+  // Plan 12-14 — DMCA Designated Agent info modal. Visible to BOTH signed-in
+  // and signed-out users since DMCA is a public-law surface (CONTEXT D-35a).
+  const [dmcaModalOpen, setDmcaModalOpen] = useState<boolean>(false);
+  // 260804 — email-code entry for the signed-in-but-unverified state. Replaced
+  // the resend-status line: sending is now the modal's job, so this screen no
+  // longer tracks it.
+  const [verifyModalOpen, setVerifyModalOpen] = useState<boolean>(false);
+  const [exportStatus, setExportStatus] = useState<{ savedPath?: string; error?: string } | null>(
+    null,
+  );
+  // 1.5s "Copied" flash for the Account ID copy affordance. Local UI only.
+  const [uuidCopied, setUuidCopied] = useState<boolean>(false);
+  // ui-A9: reset-all-memories progress state.
+  const [resetAllModalOpen, setResetAllModalOpen] = useState<boolean>(false);
+  const [resetAllProgress, setResetAllProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
+  const [resetAllDone, setResetAllDone] = useState<boolean>(false);
+  const [resetAllError, setResetAllError] = useState<string | null>(null);
+
+  const onExport = async (): Promise<void> => {
+    setExportStatus(null);
+    const res = await sei.exportData();
+    if (res.ok) {
+      setExportStatus({ savedPath: res.savedPath });
+    } else if (res.code !== 'cancelled') {
+      setExportStatus({ error: t("Couldn't prepare your export. Try again in a moment.") });
+    }
+  };
+
+  useEffect(() => {
+    void sei.getConfig().then((c) => {
+      setCfg(c);
+      setPreferredDraft(c.preferred_name ?? '');
+      // ui-A7: seed devConsoleVisible from persisted config on Settings open.
+      if (typeof c.dev_console_visible === 'boolean') {
+        setDevConsoleVisible(c.dev_console_visible);
+      }
+      // Seed the advanced-updates channel toggle from persisted config.
+      setAdvancedUpdates(c.advanced_updates === true);
+    });
+    void sei.hasApiKey().then((b) => setHasKey(b));
+    // 260725: seed the ElevenLabs-key saved-state indicator (presence only).
+    void sei
+      .voiceElevenKeyStatus()
+      .then(({ present }) => setHasElevenKey(present))
+      .catch(() => {
+        /* non-fatal — the row just shows "Not set" */
+      });
+    // Seed the user's profile picture for the chat-avatar section below.
+    void sei
+      .userGetProfile()
+      .then((p) => {
+        setUserPic(p.profilePicture);
+        setUserHandle(p.handle);
+      })
+      .catch(() => {
+        /* non-fatal — section just shows the empty/NONE state */
+      });
+  }, [setDevConsoleVisible]);
+
+  // W5: seed the speech-pack snapshot and follow the push while mounted, so
+  // download progress renders live in the Voice group.
+  useEffect(() => {
+    void sei
+      .speechPackStatus()
+      .then(({ packs }) => setPackStates(packs))
+      .catch(() => {
+        /* non-fatal — pack rows just show no state until the first push */
+      });
+    return sei.onSpeechPackState(({ packs }) => setPackStates(packs));
+  }, []);
+
+  // Updates section: load the current version once, and subscribe to updater
+  // events while this screen is mounted so the inline status line reflects an
+  // in-flight manual check. onUpdateAvailable here just flips the status to
+  // "available" — the changelog popup is App.tsx's job.
+  useEffect(() => {
+    void sei.getVersion().then(setAppVersion);
+    const unsubs = [
+      sei.onUpdateChecking(() => setUpdateStatus('checking')),
+      sei.onUpdateNotAvailable(() => setUpdateStatus('up-to-date')),
+      sei.onUpdateAvailable(() => setUpdateStatus('available')),
+      sei.onUpdateError(() => setUpdateStatus('error')),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, []);
+
+  const persistConfig = async (next: UserConfig): Promise<void> => {
+    try {
+      await sei.saveConfig(next);
+      setCfg(next);
+      setSaveError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig failed', err);
+      setSaveError(t('Failed to save. Try again.'));
+    }
+  };
+
+  const onPreferredBlur = (): void => {
+    if (!cfg) return;
+    if ((cfg.preferred_name ?? '') === preferredDraft) return;
+    void persistConfig({ ...cfg, preferred_name: preferredDraft });
+  };
+
+  const onSaveKey = async (): Promise<void> => {
+    const trimmed = keyDraft.trim();
+    if (!trimmed) {
+      setKeyError(t('API key cannot be empty.'));
+      return;
+    }
+    try {
+      await sei.saveApiKey(trimmed);
+      const has = await sei.hasApiKey();
+      setHasKey(has);
+      setKeyDraft('');
+      setEditingKey(false);
+      setKeyError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveApiKey failed', err);
+      setKeyError(t('Failed to save key. Try again.'));
+    }
+  };
+
+  const onCancelKey = (): void => {
+    setKeyDraft('');
+    setEditingKey(false);
+    setKeyError(null);
+  };
+
+  // 260725 BYOK voice: ElevenLabs key save/remove. Mirrors onSaveKey; the key
+  // is write-only (never displayed back), presence drives the bullet readout.
+  const onSaveElevenKey = async (): Promise<void> => {
+    const trimmed = elevenKeyDraft.trim();
+    if (!trimmed) {
+      setElevenKeyError(t('Key cannot be empty.'));
+      return;
+    }
+    try {
+      await sei.voiceElevenKeySet({ key: trimmed });
+      const { present } = await sei.voiceElevenKeyStatus();
+      setHasElevenKey(present);
+      setElevenKeyDraft('');
+      setEditingElevenKey(false);
+      setElevenKeyError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] voiceElevenKeySet failed', err);
+      setElevenKeyError(t('Failed to save key. Try again.'));
+    }
+  };
+
+  const onCancelElevenKey = (): void => {
+    setElevenKeyDraft('');
+    setEditingElevenKey(false);
+    setElevenKeyError(null);
+  };
+
+  // The ElevenLabs key row, shared by the BYOK Voice group and the Cloud
+  // "your own voices" group (261020, T158). Write-only: the raw key never
+  // comes back to the renderer, only its presence. On Cloud the key is
+  // optional, so "Not set" is a plain state there, not a warning.
+  const renderElevenKeyRow = (mode: 'byok' | 'cloud-optional'): React.ReactElement => (
+    <>
+      <div className={styles.row}>
+        <span className={styles.label}>
+          {t('ElevenLabs key')}
+          <InfoTip
+            label={t('About the ElevenLabs key')}
+            text={
+              mode === 'byok'
+                ? t('ElevenLabs voices need your own ElevenLabs API key. No key? Switch to the local voices.')
+                : t(
+                    "Only for voices in your own ElevenLabs account. Sei's voices and voice recognition keep running on Sei Cloud and never use this key.",
+                  )
+            }
+          />
+        </span>
+        {editingElevenKey ? (
+          <span className={styles.editor}>
+            <TextField
+              value={elevenKeyDraft}
+              onChange={setElevenKeyDraft}
+              type="password"
+              placeholder={t('Your ElevenLabs key')}
+              autoFocus
+              onEnter={() => void onSaveElevenKey()}
+              aria-label={t('ElevenLabs key')}
+            />
+            <Button kind="primary" size="sm" onClick={() => void onSaveElevenKey()}>
+              {t('Save')}
+            </Button>
+            <Button kind="quiet" size="sm" onClick={onCancelElevenKey}>
+              {t('Cancel')}
+            </Button>
+          </span>
+        ) : (
+          <>
+            <span
+              className={
+                hasElevenKey || mode === 'cloud-optional'
+                  ? styles.monoValue
+                  : `${styles.monoValue} ${styles.statusWarn}`
+              }
+            >
+              {hasElevenKey ? '•'.repeat(API_KEY_BULLET_LEN) : t('Not set')}
+            </span>
+            <Button kind="ghost" size="sm" onClick={() => setEditingElevenKey(true)}>
+              {hasElevenKey ? t('Update') : t('Set')}
+            </Button>
+            {hasElevenKey ? (
+              <Button kind="quiet" size="sm" onClick={() => void onRemoveElevenKey()}>
+                {t('Remove')}
+              </Button>
+            ) : null}
+          </>
+        )}
+      </div>
+      {elevenKeyError ? <div className={styles.errorRow}>{elevenKeyError}</div> : null}
+    </>
+  );
+
+  const onRemoveElevenKey = async (): Promise<void> => {
+    try {
+      await sei.voiceElevenKeySet({ key: null });
+      setHasElevenKey(false);
+      setElevenKeyError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] voiceElevenKeySet (clear) failed', err);
+      setElevenKeyError(t('Failed to remove key. Try again.'));
+    }
+  };
+
+  // 260725 BYOK voice recognition: Scribe (cloud, needs the ElevenLabs key)
+  // vs local Whisper. Absent means 'scribe'; applies from the next call.
+  // 260817 (W5): + SenseVoice — local like Whisper, main-side sherpa-onnx.
+  // Picking it while its pack is missing detours through the download confirm
+  // (persistSttEngine only runs once the pack is READY); scribe/whisper keep
+  // the exact pre-W5 write path.
+  const sttEngine: 'scribe' | 'whisper' | 'sensevoice' = cfg?.stt_engine ?? 'scribe';
+  const persistSttEngine = async (next: 'scribe' | 'whisper' | 'sensevoice'): Promise<void> => {
+    if (!cfg || next === sttEngine) return;
+    const updated: UserConfig = { ...cfg, stt_engine: next };
+    setCfg(updated);
+    try {
+      await sei.saveConfig(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (stt_engine) failed', err);
+      setCfg(cfg);
+      setSaveError(t('Failed to save. Try again.'));
+    }
+  };
+  const onSelectSttEngine = async (next: 'scribe' | 'whisper' | 'sensevoice'): Promise<void> => {
+    if (next === 'sensevoice' && packStates[SENSEVOICE_PACK_ID]?.state !== 'ready') {
+      setPendingPack({ id: SENSEVOICE_PACK_ID, name: t('SenseVoice'), thenSensevoice: true });
+      return;
+    }
+    await persistSttEngine(next);
+  };
+
+  // ── W5: TTS engine (Voice group, local mode). 'local' routes companion
+  // speech through the sherpa-onnx voice packs in main; the per-character
+  // ElevenLabs voiceId is KEPT untouched underneath (it still names gender
+  // for the local mapping, and a later switch back needs it). ──
+  const ttsEngine: 'elevenlabs' | 'local' = cfg?.tts_engine ?? 'elevenlabs';
+  const onSelectTtsEngine = async (next: 'elevenlabs' | 'local'): Promise<void> => {
+    if (!cfg || next === ttsEngine) return;
+    const updated: UserConfig = { ...cfg, tts_engine: next };
+    setCfg(updated);
+    try {
+      await sei.saveConfig(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (tts_engine) failed', err);
+      setCfg(cfg);
+      setSaveError(t('Failed to save. Try again.'));
+    }
+  };
+
+  // ── W5: pack download/remove. Download resolves when the pack is READY;
+  // progress arrives on the speech:pack-state push the effect above follows.
+  const startPackDownload = async (packId: string, thenSensevoice: boolean): Promise<void> => {
+    setPendingPack(null);
+    setPackError(null);
+    try {
+      await sei.speechPackDownload({ packId });
+      if (thenSensevoice) await persistSttEngine('sensevoice');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] speechPackDownload failed', err);
+      setPackError(t('Download failed. Check your connection and try again.'));
+    }
+  };
+  const onRemovePack = async (packId: string): Promise<void> => {
+    setPackError(null);
+    try {
+      await sei.speechPackRemove({ packId });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] speechPackRemove failed', err);
+      setPackError(t('Failed to uninstall. Try again.'));
+    }
+  };
+
+  // ── W5: model picker + Test probe handlers. ──
+  /** The model stored for a provider, or undefined when riding the default. */
+  const storedModelFor = (provider: Provider): string | undefined => {
+    const entry = (cfg?.provider_config as Record<string, unknown> | undefined)?.[provider];
+    const model =
+      entry && typeof entry === 'object' ? (entry as { model?: unknown }).model : undefined;
+    return typeof model === 'string' && model.trim() ? model.trim() : undefined;
+  };
+  /** Human string for a typed llm error token — every token gets a sentence. */
+  const llmErrorText = (token: string): string => {
+    if (token === 'no_api_key') return t('Add your API key first.');
+    if (token === 'unauthorized')
+      return t('The provider rejected your key. Check that it is correct and active.');
+    if (token === 'timeout') return t('Timed out. Check your connection and try again.');
+    if (token === 'network') return t('Could not reach the provider. Check your connection.');
+    if (token === 'chatgpt_signed_out') return t('Sign in with ChatGPT first.');
+    if (token === 'chatgpt_plan_disabled') return t('Turn on ChatGPT plan use first.');
+    if (token === 'chatgpt_usage_limit') return t("You've reached your ChatGPT plan's usage limit.");
+    if (token === 'chatgpt_not_eligible' || token === 'chatgpt_forbidden')
+      return t("This ChatGPT account can't use its plan in Sei.");
+    if (token.startsWith('http_'))
+      return t('The provider returned an error (HTTP {status}).', { status: token.slice(5) });
+    return t('Something went wrong. Try again.');
+  };
+  const onOpenModelPicker = async (): Promise<void> => {
+    if (modelPickerOpen) {
+      setModelPickerOpen(false);
+      return;
+    }
+    setModelPickerOpen(true);
+    setModelListLoading(true);
+    setModelList(null);
+    try {
+      const res = await sei.llmListModels(currentProvider);
+      setModelList(res);
+    } catch {
+      setModelList({ models: [], error: 'unknown' });
+    } finally {
+      setModelListLoading(false);
+    }
+  };
+  const onPickModel = async (modelId: string): Promise<void> => {
+    if (!cfg) return;
+    const pc = { ...((cfg.provider_config as Record<string, unknown> | undefined) ?? {}) };
+    const prev = pc[currentProvider];
+    pc[currentProvider] = {
+      ...(prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {}),
+      model: modelId,
+    };
+    const updated: UserConfig = { ...cfg, provider_config: pc };
+    setCfg(updated);
+    setModelPickerOpen(false);
+    setTestState('idle');
+    try {
+      await sei.saveConfig(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (provider model) failed', err);
+      setCfg(cfg);
+      setSaveError(t('Failed to save. Try again.'));
+    }
+  };
+  const onRunTest = async (): Promise<void> => {
+    if (testState === 'testing') return;
+    setTestState('testing');
+    try {
+      const res = await sei.llmTest(currentProvider, storedModelFor(currentProvider) ?? '');
+      setTestState(res);
+    } catch {
+      setTestState({ ok: false, error: 'unknown' });
+    }
+  };
+
+  // App UI language (260730). Optimistic store flip (every subscribed
+  // component re-renders immediately), then persist through the same
+  // saveConfig path as the toggles; roll back on failure.
+  const onSelectLanguage = async (next: UiLanguage): Promise<void> => {
+    if (next === lang) return;
+    const prev = lang;
+    setLang(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, ui_language: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (ui_language) failed', err);
+      setLang(prev);
+    }
+  };
+
+  // Theme Seg: dark / light / system. Every move writes straight through —
+  // setThemeMode (App re-applies + wires the system listener), applyTheme for
+  // an immediate paint, and saveConfig persists the mode.
+  const onSelectTheme = async (mode: ThemeMode): Promise<void> => {
+    if (mode === themeMode) return;
+    setThemeMode(mode);
+    applyTheme(mode);
+    if (cfg) {
+      const updated: UserConfig = { ...cfg, theme_mode: mode };
+      try {
+        await sei.saveConfig(updated);
+        setCfg(updated);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[SettingsScreen] saveConfig (theme) failed', err);
+      }
+    }
+  };
+
+  // 260724: background image applied/removed. Main already persisted
+  // background_image inside the IPC handler; mirror it into the local cfg copy
+  // so a later slider commit (which saves the WHOLE cfg) can't resurrect a
+  // stale ref.
+  const onBackgroundChanged = (ref: string | null): void => {
+    setBackgroundImage(ref);
+    setCfg((c) => (c ? { ...c, background_image: ref } : c));
+  };
+
+  // Sliders update the store on every input (live repaint of the <main>
+  // background) and persist on release/blur.
+  const commitBackgroundSliders = (): void => {
+    if (!cfg) return;
+    const { backgroundOpacity: opacity, backgroundBrightness: brightness } = useUiStore.getState();
+    if (cfg.background_opacity === opacity && cfg.background_brightness === brightness) return;
+    void persistConfig({
+      ...cfg,
+      background_opacity: opacity,
+      background_brightness: brightness,
+    });
+  };
+
+  const currentProvider: Provider = (cfg?.provider ?? 'anthropic') as Provider;
+  /** The default a provider rides when no model is stored. The ChatGPT plan's
+   *  comes from the signed-in account's catalog (what main resolves too). */
+  const defaultModelFor = (provider: Provider): string =>
+    provider === 'chatgpt' && chatgptStatus?.models.length
+      ? pickDefaultChatgptModel(chatgptStatus.models)
+      : DEFAULT_MODELS[provider];
+
+  // ui-A1: provider tile click changes config.provider AND clears any existing
+  // api key (the prior key is for a different vendor; reusing it would silently
+  // 401 against the new baseURL). On clear we leave the editor open so the user
+  // can paste the new vendor's key next.
+  const onChangeProvider = async (next: Provider): Promise<void> => {
+    if (!cfg) return;
+    if (cfg.provider === next) return;
+    try {
+      await sei.saveConfig({ ...cfg, provider: next, provider_config: cfg.provider_config ?? {} });
+      setCfg({ ...cfg, provider: next });
+      // 261017: the ChatGPT plan uses no API key, so switching TO it leaves
+      // the saved key alone and opens no key editor. Switching away from it
+      // still clears, as before (the slot may hold another vendor's key).
+      if (next !== 'chatgpt') {
+        try {
+          await sei.saveApiKey('');
+          setHasKey(false);
+        } catch {
+          // best-effort
+        }
+      }
+      setEditingKey(next !== 'chatgpt');
+      setKeyDraft('');
+      setKeyError(null);
+      // W5: a different vendor lists different models — drop the open picker
+      // and any stale probe result (the stored per-provider model persists).
+      setModelPickerOpen(false);
+      setModelList(null);
+      setTestState('idle');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (provider) failed', err);
+      setSaveError(t('Failed to save provider. Try again.'));
+    }
+  };
+
+  // 261023: Credits' "Use your ChatGPT plan" row signs in there, then lands
+  // here with view.useChatgptPlan so the switch runs through the same path as
+  // this screen's own button: the cloud -> local confirm (billing changes), or
+  // just the provider pick when already on the local backend. Handled once;
+  // the flag is cleared so a re-render or a later visit does not re-open it.
+  const chatgptPlanIntent = useUiStore((s) => s.view.kind === 'settings' && s.view.useChatgptPlan === true);
+  useEffect(() => {
+    if (!chatgptPlanIntent || !cfg || !chatgptReady(chatgptStatus)) return;
+    if (aiBackendKind !== 'cloud-proxy' && aiBackendKind !== 'local') return;
+    useUiStore.setState({ view: { kind: 'settings' } });
+    if (aiBackendKind === 'cloud-proxy') {
+      setSwitchVia('chatgpt');
+      setPendingSwitch('local');
+    } else {
+      void onChangeProvider('chatgpt');
+    }
+    // onChangeProvider closes over cfg, which is a dependency already.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatgptPlanIntent, cfg, chatgptStatus, aiBackendKind]);
+
+  // ui-A7: persist developer-console toggle. Update zustand FIRST so the UI
+  // reacts immediately, then write through (roll back on failure).
+  const onToggleDevConsole = async (next: boolean): Promise<void> => {
+    setDevConsoleVisible(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, dev_console_visible: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (dev_console_visible) failed', err);
+      setDevConsoleVisible(!next);
+    }
+  };
+
+  // About: persist the "Advanced updates" channel toggle, then push it to the
+  // live updater so it takes effect without a re-launch. Optimistic-then-
+  // write-through, same as the dev-console toggle; setUpdateChannel(true) also
+  // re-checks so a waiting beta surfaces right away.
+  const onToggleAdvancedUpdates = async (next: boolean): Promise<void> => {
+    setAdvancedUpdates(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, advanced_updates: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+      await sei.setUpdateChannel(next);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (advanced_updates) failed', err);
+      setAdvancedUpdates(!next);
+    }
+  };
+
+  // Appearance & feel: persist the "Realistic typing" pacing toggle. Same
+  // optimistic-then-write-through pattern as the dev-console toggle.
+  const onToggleRealisticTyping = async (next: boolean): Promise<void> => {
+    setRealisticTyping(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, realistic_typing: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (realistic_typing) failed', err);
+      setRealisticTyping(!next);
+    }
+  };
+
+  // 260707: persist the analytics opt-out via its dedicated IPC (which also
+  // applies it to the live analytics client), NOT saveConfig — so it never
+  // clobbers a concurrent config write. `enabled` is the toggle state
+  // (analytics ON); opt-out is the inverse.
+  const onToggleAnalytics = async (enabled: boolean): Promise<void> => {
+    setAnalyticsOptOut(!enabled);
+    try {
+      await sei.setAnalyticsOptOut(!enabled);
+      if (cfg) setCfg({ ...cfg, analytics_opt_out: !enabled });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] setAnalyticsOptOut failed', err);
+      setAnalyticsOptOut(enabled); // rollback
+    }
+  };
+
+  // Appearance & feel: live captions on the voice-call screen (default OFF).
+  // Same optimistic-then-write-through pattern as the toggles above.
+  const onToggleCallCaptions = async (): Promise<void> => {
+    const next = !callCaptions;
+    setCallCaptions(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, call_captions: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (call_captions) failed', err);
+      setCallCaptions(!next);
+    }
+  };
+
+  // Appearance & feel: avatar overlay mode (260804, default OFF). Writes
+  // avatar_mode; the deprecated call_overlay_enabled boolean is never written
+  // again (effectiveAvatarMode folds it in only while avatar_mode is absent).
+  // The overlay window itself is spawned/torn down by the pusher in App.tsx.
+  const onSelectAvatarMode = async (next: AvatarMode): Promise<void> => {
+    const prev = avatarMode;
+    setAvatarMode(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, avatar_mode: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (avatar_mode) failed', err);
+      setAvatarMode(prev);
+    }
+  };
+
+  // Conversation starters (260707, default ON): during a quiet stretch on a
+  // live call, a companion may bring up a topic on its own.
+  const onToggleConvoStarters = async (): Promise<void> => {
+    const next = !convoStartersEnabled;
+    setConvoStartersEnabled(next);
+    if (!cfg) return;
+    try {
+      const updated: UserConfig = { ...cfg, call_convo_starters: next };
+      await sei.saveConfig(updated);
+      setCfg(updated);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (call_convo_starters) failed', err);
+      setConvoStartersEnabled(!next);
+    }
+  };
+
+  // Write through vision_mode to UserConfig (the config is the source of truth;
+  // botSupervisor bridges it into config.vision at fork). Mirrors the toggle
+  // optimistic-then-rollback discipline. Always editable — not gated on a live
+  // bot session (changes apply at the next summon).
+  const writeVisionConfig = async (patch: Partial<UserConfig>): Promise<void> => {
+    if (!cfg) return;
+    const updated: UserConfig = { ...cfg, ...patch };
+    setCfg(updated);
+    try {
+      await sei.saveConfig(updated);
+      setSaveError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[SettingsScreen] saveConfig (vision) failed', err);
+      setCfg(cfg);
+      setSaveError(t('Failed to save. Try again.'));
+    }
+  };
+
+
+  // ui-A9: "Reset all character memories" — open the confirm popup. The actual
+  // wipe runs in runResetAllMemories once the user confirms.
+  const onResetAllMemoriesClick = (): void => {
+    setResetAllError(null);
+    setResetAllDone(false);
+    setResetAllModalOpen(true);
+  };
+
+  const runResetAllMemories = async (): Promise<void> => {
+    const snapshot = allCharacters.slice();
+    setResetAllModalOpen(false);
+    setResetAllProgress({ done: 0, total: snapshot.length });
+    setResetAllError(null);
+    setResetAllDone(false);
+    let firstError: string | null = null;
+    for (let i = 0; i < snapshot.length; i += 1) {
+      const c = snapshot[i];
+      try {
+        await sei.resetMemory(c.id);
+        // Chat transcript lives in the wiped memory dir — evict the cache.
+        useChatStore.getState().evictLocal(c.id);
+        await refreshCharacter(c.id);
+      } catch (err) {
+        if (firstError === null) {
+          firstError = err instanceof Error ? err.message : t('Failed to reset some memories.');
+        }
+      }
+      setResetAllProgress({ done: i + 1, total: snapshot.length });
+    }
+    setResetAllProgress(null);
+    if (firstError) setResetAllError(firstError);
+    else {
+      setResetAllDone(true);
+      window.setTimeout(() => setResetAllDone(false), 2000);
+    }
+  };
+
+  const isCloud = aiBackendKind === 'cloud-proxy';
+  const backendSegValue: 'cloud' | 'mykey' = isCloud ? 'cloud' : 'mykey';
+
+  // Version value: "v{x}" alone, or "v{x} · <status>" after a check. The
+  // status word is color-coded (green ok / orange in progress / red failed).
+  const versionStatus: { text: string; cls: string } | null =
+    updateStatus === 'checking'
+      ? { text: t('checking…'), cls: styles.statusWarn }
+      : updateStatus === 'up-to-date'
+        ? { text: t('up to date'), cls: styles.statusOk }
+        : updateStatus === 'available'
+          ? { text: t('update available'), cls: styles.statusWarn }
+          : updateStatus === 'error'
+            ? { text: t('check failed'), cls: styles.statusErr }
+            : null;
+  const versionValue = appVersion ? `v${appVersion}` : '–';
+
+  // (The literal 'Reset all memories…' key below is what D-FIX.3 greps for.)
+  const resetAllLabel = resetAllDone
+    ? t('All memories reset')
+    : resetAllProgress
+      ? t('Resetting {done} of {total}…', {
+          done: resetAllProgress.done,
+          total: resetAllProgress.total,
+        })
+      : t('Reset all memories…');
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.col}>
+        {saveError ? <div className={styles.errorRow}>{saveError}</div> : null}
+
+        {/* ── Profile ─────────────────────────────────────────── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Profile') /* >Profile< */}</h3>
+          <div className={styles.profileRow} onBlur={onPreferredBlur}>
+            <PortraitImagePicker
+              variant="avatar"
+              value={userPic}
+              onChange={setUserPic}
+              applyOverride={(a) => sei.userApplyProfilePicture(a)}
+              removeOverride={() => sei.userRemoveProfilePicture()}
+            />
+            <span className={styles.profileName}>
+              <TextField
+                value={preferredDraft}
+                onChange={setPreferredDraft}
+                placeholder={t('Your name')}
+                aria-label={t('Name')}
+              />
+            </span>
+          </div>
+        </div>
+
+        {/* ── Account (signed-in only) ────────────────────────── */}
+        {authState.kind === 'signed_in' ? (
+          <div className={styles.group}>
+            <h3 className={styles.groupTitle}>{t('Account') /* >Account< */}</h3>
+
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Email')}</span>
+              <span className={styles.monoValue}>{authState.user.email}</span>
+              <Button kind="ghost" size="sm" onClick={() => setSignOutModalOpen(true)}>
+                {t('Sign out')}
+              </Button>
+            </div>
+            {!authState.user.emailVerified ? (
+              <div className={styles.row}>
+                <span className={styles.label}>{t('Verify email')}</span>
+                {/* 260804 — opens the code modal, which sends a fresh code on
+                    mount. The old button only resent the link and left the
+                    user to go find it; there is now something to type. */}
+                <Button kind="quiet" size="sm" onClick={() => setVerifyModalOpen(true)}>
+                  {t('Enter code')}
+                </Button>
+              </div>
+            ) : null}
+
+            {/* 261023: link a ChatGPT identity to this account, so "Continue
+                with ChatGPT" signs into it. */}
+            <ChatgptLinkRow
+              rowClassName={styles.row}
+              labelClassName={styles.label}
+              valueClassName={styles.monoValue}
+              errorClassName={styles.errorRow}
+            />
+
+            {/* 260724: the Playtime row is gone. Weekly usage lives on the plan
+                screen (the rail's Plan icon), and there is no time estimate to
+                show. */}
+
+            {/* Account ID — the short 4-char public handle (profiles.handle) for
+                support workflows, not the long Supabase UUID. Falls back to the
+                UUID only until the profile loads (or if no handle is assigned). */}
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Account ID')}</span>
+              <span className={styles.idValue}>
+                <span className={styles.monoValue}>{userHandle ?? authState.user.id}</span>
+                <button
+                  type="button"
+                  className={styles.copyBtn}
+                  aria-label={t('Copy account ID')}
+                  data-tip={uuidCopied ? t('Copied') : t('Copy')}
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(userHandle ?? authState.user.id)
+                      .then(() => {
+                        setUuidCopied(true);
+                        window.setTimeout(() => setUuidCopied(false), 1500);
+                      })
+                      .catch(() => {
+                        setUuidCopied(false);
+                      });
+                  }}
+                >
+                  <CopyIcon size={15} />
+                </button>
+              </span>
+            </div>
+
+            {/* 260706: full questionnaire retake (age feel / what you're
+                looking for / art style), prefilled, returning here. 260731:
+                Sui asks it, in her scene, rather than a form. */}
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Companion preferences')}</span>
+              <Button
+                kind="ghost"
+                size="sm"
+                onClick={() => navigate({ kind: 'sui-prefs', next: 'settings' })}
+              >
+                {t('Update my preferences')}
+              </Button>
+            </div>
+
+            {/* 261023: the own-key (local profile) import, for a player who
+                said "Not now" to the offer. Hidden when there is nothing. */}
+            <LocalImportRow accountId={authState.user.id} />
+
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Migrate local companions')}</span>
+              <Button kind="ghost" size="sm" onClick={() => setMigrateModalOpen(true)}>
+                {t('Migrate')}
+              </Button>
+            </div>
+
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Export data')}</span>
+              <Button kind="ghost" size="sm" onClick={() => void onExport()}>
+                {t('Export as JSON')}
+              </Button>
+            </div>
+            {exportStatus?.savedPath ? (
+              <p className={styles.helper}>{t('Saved to {path}', { path: exportStatus.savedPath })}</p>
+            ) : null}
+            {exportStatus?.error ? (
+              <p className={`${styles.helper} ${styles.helperError}`}>{exportStatus.error}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* ── AI ──────────────────────────────────────────────── */}
+        {/* The Chat language row was removed (260725): the conversation
+            language is auto-detected from the player's voice (Scribe STT →
+            main's voice/languageAutoSwitch.ts). */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('AI') /* >AI< */}</h3>
+
+          {/* Backend switch — signed-in only (main rejects cloud-proxy for
+              signed-out callers; a signed-out user is always local). Selecting
+              the other option opens the confirm modal; the Seg value tracks
+              ai_backend_kind, so cancelling reverts the selection. */}
+          {/* 260725: aiBackendKind === null means main has not reported a mode
+              yet — render no Backend switch rather than a guessed selection.
+              (A guessed "My key" here is how the UI claimed BYOK over live
+              cloud billing.) */}
+          {authState.kind === 'signed_in' && aiBackendKind !== null ? (
+            <div className={styles.row}>
+              <span className={styles.label}>
+                {t('Backend')}
+                <InfoTip
+                  label={t('About the AI backend')}
+                  text={
+                    isCloud
+                      ? t(
+                          'Switching to your own API key turns off managed billing and routes Sei through the key stored on this device. Your subscription keeps renewing until you cancel it.',
+                        )
+                      : t(
+                          'Cloud turns off your local API key and routes Sei through our managed cloud. Switch back any time.',
+                        )
+                  }
+                />
+              </span>
+              <Seg
+                aria-label="AI backend"
+                value={backendSegValue}
+                options={[
+                  { value: 'cloud', label: t('Cloud') },
+                  { value: 'mykey', label: t('My key') },
+                ]}
+                onChange={(v) => {
+                  const target = v === 'cloud' ? 'cloud-proxy' : 'local';
+                  if (target !== aiBackendKind) setPendingSwitch(target);
+                }}
+              />
+            </div>
+          ) : null}
+          {switchNotice !== null ? (
+            <p className={styles.helper} role="status">
+              {switchNotice === 'switched-to-cloud'
+                ? t('Switched. Your running bot now routes through Sei’s managed cloud.')
+                : t('Switched. Your running bot now uses your own API key.')}
+            </p>
+          ) : null}
+
+          {/* 261017 (issue #46): the ChatGPT plan is offered on every Sei plan,
+              Free included, so a cloud account sees the card too. Choosing it
+              switches the backend to local (with its own confirm) and picks
+              the ChatGPT plan as the provider. */}
+          {aiBackendKind === 'cloud-proxy' && authState.kind === 'signed_in' ? (
+            <ChatgptPlanSettings
+              active={false}
+              onUsePlan={() => {
+                setSwitchVia('chatgpt');
+                setPendingSwitch('local');
+              }}
+            />
+          ) : null}
+
+          {/* Provider + API key — local (BYOK) mode only. */}
+          {aiBackendKind === 'local' ? (
+            <>
+              <div className={styles.row}>
+                <span className={styles.label}>{t('Provider')}</span>
+                <ProviderSelect
+                  value={currentProvider}
+                  onChange={(p) => void onChangeProvider(p)}
+                  compact
+                />
+              </div>
+              {/* Ollama is keyless (260915): no key row, no "Not set" warning —
+                  a local server authenticates nothing, so asking for a key
+                  read as a blocker to people setting up local models. */}
+              {currentProvider === 'chatgpt' ? (
+                <ChatgptPlanSettings active onUsePlan={() => undefined} />
+              ) : currentProvider === 'ollama' ? (
+                <p className={styles.helper}>{t('Ollama runs on your computer and needs no API key.')}</p>
+              ) : (
+              <div className={styles.row}>
+                <span className={styles.label}>{t('API key')}</span>
+                {editingKey ? (
+                  <span className={styles.editor}>
+                    <TextField
+                      value={keyDraft}
+                      onChange={setKeyDraft}
+                      type="password"
+                      placeholder="sk-…"
+                      autoFocus
+                      onEnter={() => void onSaveKey()}
+                      aria-label={t('API key')}
+                    />
+                    <Button kind="primary" size="sm" onClick={() => void onSaveKey()}>
+                      {t('Save')}
+                    </Button>
+                    <Button kind="quiet" size="sm" onClick={onCancelKey}>
+                      {t('Cancel')}
+                    </Button>
+                  </span>
+                ) : (
+                  <>
+                    <span
+                      className={hasKey ? styles.monoValue : `${styles.monoValue} ${styles.statusWarn}`}
+                    >
+                      {hasKey ? '•'.repeat(API_KEY_BULLET_LEN) : t('Not set')}
+                    </span>
+                    <Button kind="ghost" size="sm" onClick={() => setEditingKey(true)}>
+                      {hasKey ? t('Update') : t('Set')}
+                    </Button>
+                  </>
+                )}
+              </div>
+              )}
+              {keyError && currentProvider !== 'ollama' && currentProvider !== 'chatgpt' ? (
+                <div className={styles.errorRow}>{keyError}</div>
+              ) : null}
+
+              {/* W5 (260817): model picker. Shown once the provider can list
+                  models (a saved key, or Ollama which needs none). Persists to
+                  provider_config[provider].model — what resolveLocalModel and
+                  the bot init payload read. */}
+              {(currentProvider === 'chatgpt' ? chatgptReady(chatgptStatus) : hasKey || currentProvider === 'ollama') ? (
+                <>
+                  <div className={styles.row}>
+                    <span className={styles.label}>{t('Model')}</span>
+                    <span className={styles.monoValue}>
+                      {storedModelFor(currentProvider) ??
+                        `${defaultModelFor(currentProvider)} · ${t('default')}`}
+                    </span>
+                    <Button kind="ghost" size="sm" onClick={() => void onOpenModelPicker()}>
+                      {t('Choose model')}
+                    </Button>
+                  </div>
+                  {modelPickerOpen ? (
+                    <>
+                      {modelListLoading ? (
+                        <p className={styles.helper} role="status">
+                          {t('Loading models…')}
+                        </p>
+                      ) : modelList?.error ? (
+                        <p className={`${styles.helper} ${styles.helperError}`} role="alert">
+                          {llmErrorText(modelList.error)}
+                        </p>
+                      ) : (
+                        <>
+                          <div
+                            className={styles.modelList}
+                            role="listbox"
+                            aria-label={t('Model')}
+                          >
+                            {(modelList?.models ?? []).map((m) => (
+                              <button
+                                key={m.id}
+                                type="button"
+                                role="option"
+                                aria-selected={m.id === storedModelFor(currentProvider)}
+                                className={[
+                                  styles.modelRow,
+                                  m.id === storedModelFor(currentProvider)
+                                    ? styles.modelRowOn
+                                    : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                                onClick={() => void onPickModel(m.id)}
+                              >
+                                <span className={styles.monoValue}>{m.label ?? m.id}</span>
+                                {m.vision === 'no' ? (
+                                  <span className={styles.modelMark}>{t('no vision')}</span>
+                                ) : null}
+                              </button>
+                            ))}
+                            {(modelList?.models ?? []).length === 0 ? (
+                              <p className={styles.helper}>{t('No models listed.')}</p>
+                            ) : null}
+                          </div>
+                          <p className={styles.helper}>
+                            {t(
+                              'Models marked "no vision" cannot see images. Screen sharing and Draw! need a model that can see images.',
+                            )}
+                          </p>
+                        </>
+                      )}
+                    </>
+                  ) : null}
+
+                  {/* W5: Test probe — a 1-token completion through the same
+                      layer every surface runs. DeepSeek can queue for up to a
+                      minute at peak, hence the spinner copy. */}
+                  <div className={styles.row}>
+                    <span className={styles.label}>{t('Connection')}</span>
+                    {testState === 'testing' ? (
+                      <span className={`${styles.monoValue} ${styles.statusWarn}`} role="status">
+                        {t('Testing…')}
+                      </span>
+                    ) : testState !== 'idle' && testState.ok ? (
+                      <span className={`${styles.monoValue} ${styles.statusOk}`} role="status">
+                        {t('Working. Replied in {s}s.', {
+                          s: (testState.latencyMs / 1000).toFixed(1),
+                        })}
+                      </span>
+                    ) : (
+                      <span className={styles.monoValue}>{'–'}</span>
+                    )}
+                    <Button
+                      kind="ghost"
+                      size="sm"
+                      disabled={testState === 'testing'}
+                      onClick={() => void onRunTest()}
+                    >
+                      {t('Test')}
+                    </Button>
+                  </div>
+                  {testState === 'testing' ? (
+                    <p className={styles.helper} role="status">
+                      {t('Testing your key and model. This can take up to a minute.')}
+                    </p>
+                  ) : null}
+                  {testState !== 'idle' && testState !== 'testing' && !testState.ok ? (
+                    <p className={`${styles.helper} ${styles.helperError}`} role="alert">
+                      {llmErrorText(testState.error)}
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+
+              {/* 261017 (issue #46): the "Use your ChatGPT plan" card, offered
+                  beside every other local provider. */}
+              {currentProvider !== 'chatgpt' ? (
+                <ChatgptPlanSettings active={false} onUsePlan={() => onChangeProvider('chatgpt')} />
+              ) : null}
+            </>
+          ) : null}
+        </div>
+
+        {/* ── Voice (W5, 260817) — local (BYOK) mode only: TTS engine +
+            voice recognition. Cloud accounts keep their managed voice path
+            and never see this group. ─────────────────────────────────── */}
+        {aiBackendKind === 'local' ? (
+          <div className={styles.group}>
+            <h3 className={styles.groupTitle}>{t('Voice') /* >Voice< */}</h3>
+
+            {/* TTS engine: ElevenLabs (BYOK key) or the free local voices.
+                Persists tts_engine; companions KEEP their ElevenLabs voiceId
+                either way — local mode maps it to a local voice by gender and
+                chat language. */}
+            <div className={styles.row}>
+              <span className={styles.label}>
+                {t('Voices')}
+                <InfoTip
+                  label={t('About voice engines')}
+                  text={t(
+                    'What speaks your companions\' lines on calls. ElevenLabs uses your own key. Local voices run on this device and work offline.',
+                  )}
+                />
+              </span>
+              <Seg
+                aria-label={t('Voices')}
+                value={ttsEngine}
+                options={[
+                  { value: 'elevenlabs', label: t('ElevenLabs') },
+                  { value: 'local', label: t('Local') },
+                ]}
+                onChange={(v) => void onSelectTtsEngine(v)}
+              />
+            </div>
+
+            {ttsEngine === 'elevenlabs' ? (
+              <>
+                {/* ElevenLabs key (260725, relocated here by W5): powers TTS
+                    and Scribe recognition. Write-only, same UX as the API key
+                    row. 261020: the row is shared with the Cloud group. */}
+                {renderElevenKeyRow('byok')}
+                {/* 261019: the voice picker lists the account's own voices
+                    (cloned, designed, saved) through this key. */}
+                <p className={styles.helper}>
+                  {t('Your own ElevenLabs voices show up in the voice picker once your key is saved.')}
+                </p>
+                {/* Local backend + no ElevenLabs key: the cloud voice pool (and
+                    the "Let Sei pick" auto-assign) has nothing to play through.
+                    Say so here instead of letting companions go silent. */}
+                {!hasElevenKey ? (
+                  <p className={`${styles.helper} ${styles.statusWarn}`} role="alert">
+                    {t(
+                      'Not connected to Sei cloud or an ElevenLabs key. Custom voices will not play. Local voice packs still work.',
+                    )}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Local voice packs: three downloads carry the four voices
+                    (the English pack holds both speakers). State rides the
+                    speech:pack-state push; sizes are the registry's exact
+                    bytes. */}
+                {TTS_PACK_ROWS.map((row) => {
+                  const st = packStates[row.id];
+                  return (
+                    <div className={styles.row} key={row.id}>
+                      <span className={styles.label}>{t(row.label)}</span>
+                      {st?.state === 'downloading' ? (
+                        <span className={`${styles.monoValue} ${styles.statusWarn}`} role="status">
+                          {t('Downloading… {pct}%', { pct: st.pct ?? 0 })}
+                        </span>
+                      ) : st?.state === 'ready' ? (
+                        <>
+                          <span className={`${styles.monoValue} ${styles.statusOk}`}>{t('Ready')}</span>
+                          <Button
+                            kind="quiet"
+                            size="sm"
+                            onClick={() => void onRemovePack(row.id)}
+                          >
+                            {t('Uninstall')}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          kind="ghost"
+                          size="sm"
+                          disabled={!st}
+                          onClick={() => setPendingPack({ id: row.id, name: t(row.label) })}
+                        >
+                          {t('Download…')}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+                <p className={styles.helper}>
+                  {t(
+                    'Voices that run on this device. Each companion speaks with the one matching their voice and chat language.',
+                  )}
+                </p>
+              </>
+            )}
+
+            {/* Voice recognition (260725, relocated here by W5): what
+                transcribes your mic on calls. Applies from the next call.
+                W5 adds SenseVoice (free local model, strongest on Chinese);
+                picking it downloads the model first. */}
+            <div className={styles.row}>
+              <span className={styles.label}>{t('Voice recognition')}</span>
+              <Seg
+                aria-label={t('Voice recognition')}
+                value={sttEngine}
+                options={[
+                  { value: 'scribe', label: t('ElevenLabs Scribe') },
+                  { value: 'whisper', label: t('Local Whisper') },
+                  { value: 'sensevoice', label: t('SenseVoice') },
+                ]}
+                onChange={(v) => void onSelectSttEngine(v)}
+              />
+            </div>
+            {packStates[SENSEVOICE_PACK_ID]?.state === 'downloading' ? (
+              <p className={`${styles.helper} ${styles.statusWarn}`} role="status">
+                {t('Downloading SenseVoice… {pct}%', {
+                  pct: packStates[SENSEVOICE_PACK_ID]?.pct ?? 0,
+                })}
+              </p>
+            ) : (
+              <p className={styles.helper}>
+                {sttEngine === 'whisper'
+                  ? t('Offline. Downloads a small model on first call.')
+                  : sttEngine === 'sensevoice'
+                    ? t('Offline. Runs on this device. Strongest for Chinese; English is weaker.')
+                    : t('Better accuracy. Uses your ElevenLabs key.')}
+              </p>
+            )}
+            {packError ? (
+              <p className={`${styles.helper} ${styles.helperError}`} role="alert">
+                {packError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* ── Voice on Sei Cloud (261020, T158): one OPTIONAL key, only for
+            voices from the user's own ElevenLabs account. Those speak direct
+            with the key and use the user's ElevenLabs credits; Sei's pool
+            voices and speech recognition stay on the proxy (never billed to
+            the key). The BYOK group above keeps its own key row. ───────── */}
+        {elevenKeySettingMode(aiBackendKind, ttsEngine) === 'cloud-optional' ? (
+          <div className={styles.group} data-testid="cloud-own-voices">
+            <h3 className={styles.groupTitle}>{t('Voice')}</h3>
+            <p className={styles.helper}>
+              <strong>{t('Use your own ElevenLabs voices')}</strong>
+            </p>
+            {renderElevenKeyRow('cloud-optional')}
+            <p className={styles.helper}>
+              {t(
+                "Optional. Only needed for voices from your own ElevenLabs account, like a clone of your voice. Those voices use your ElevenLabs credits. Sei's voices are included in your plan.",
+              )}
+            </p>
+          </div>
+        ) : null}
+
+        {/* ── Games & search (game adapters, 260908): ONE group for every
+            registered game. The left column picks the game, the right column
+            shows its rows (GamesSettingsGroup); Minecraft's rows are
+            unchanged. 261023: web search (provider + optional key) moved in
+            as the last tab; it was its own "Search" group above About. Shown
+            in both cloud and local mode: none of it depends on the backend. ── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Games & search') /* >Games & search< */}</h3>
+          <GamesSettingsGroup
+            config={cfg}
+            writeConfig={writeVisionConfig}
+            extraTabs={[
+              {
+                id: 'search',
+                title: 'Web search',
+                render: () => <SearchSettingsSection config={cfg} saveConfig={persistConfig} />,
+              },
+            ]}
+          />
+        </div>
+
+        {/* ── Language (260730) — app UI language, its own section ── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Language')}</h3>
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('App language')}
+              <InfoTip
+                label={t('About the app language')}
+                text={t(
+                  'Switches the whole app to this language. Companions you create while it is on speak it too.',
+                )}
+              />
+            </span>
+            <Seg
+              aria-label={t('App language')}
+              value={lang}
+              options={[
+                { value: 'en', label: 'EN' },
+                { value: 'zh', label: '中文' },
+              ]}
+              onChange={(v) => void onSelectLanguage(v as UiLanguage)}
+            />
+          </div>
+        </div>
+
+        {/* ── Theme (260724) — named themes + custom background ── */}
+        <div className={styles.group} data-tutorial="theme-group">
+          <h3 className={styles.groupTitle}>{t('Theme')}</h3>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Theme')}</span>
+            {/* Swatch circles instead of a Seg; System was retired from the UI
+                (a legacy 'system' mode still resolves, and highlights the
+                theme it currently resolves to until the user picks one).
+                Labels are pre-translated so the map param can stay `t` (the
+                structure test pins the literal data-tip={t.label}). */}
+            <div className={styles.swatchRow} role="radiogroup" aria-label="Theme">
+              {THEME_SWATCHES.map((s) => ({ ...s, label: t(s.label) })).map((t) => {
+                const active =
+                  themeMode === t.value ||
+                  (themeMode === 'system' &&
+                    t.value === (resolvedScheme() === 'dark' ? 'midnight' : 'ice'));
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    aria-label={t.label}
+                    data-tip={t.label}
+                    className={[styles.swatch, active ? styles.swatchOn : '']
+                      .filter(Boolean)
+                      .join(' ')}
+                    style={{
+                      // Longhands on purpose: the `background` shorthand resets
+                      // background-origin to padding-box, which makes the
+                      // gradient tile wrap under the 2px border and ring the
+                      // circle with the opposite color. border-box origin runs
+                      // the two halves all the way to the rim.
+                      backgroundImage: `linear-gradient(135deg, ${t.colors[0]} 50%, ${t.colors[1]} 50%)`,
+                      backgroundOrigin: 'border-box',
+                      backgroundClip: 'border-box',
+                    }}
+                    onClick={() => void onSelectTheme(t.value)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+          {/* Custom background image, painted under the theme colors on the
+              main content panel. The two sliders only appear once set. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Background')}
+              <InfoTip
+                label={t('About custom backgrounds')}
+                text={t(
+                  'Shows your own picture behind the app, under the theme colors. Use the sliders to blend it in.',
+                )}
+              />
+            </span>
+            <BackgroundImagePicker
+              value={backgroundImage}
+              bust={backgroundBust}
+              onChange={onBackgroundChanged}
+            />
+          </div>
+          {backgroundImage ? (
+            <>
+              <div className={styles.row}>
+                <span className={styles.label}>{t('Background visibility')}</span>
+                <input
+                  className={styles.slider}
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round(backgroundOpacity * 100)}
+                  aria-label={t('Background visibility')}
+                  onChange={(e) => setBackgroundOpacity(Number(e.target.value) / 100)}
+                  onMouseUp={commitBackgroundSliders}
+                  onTouchEnd={commitBackgroundSliders}
+                  onBlur={commitBackgroundSliders}
+                />
+                <span className={styles.monoValue}>{Math.round(backgroundOpacity * 100)}%</span>
+              </div>
+              <div className={styles.row}>
+                <span className={styles.label}>{t('Background brightness')}</span>
+                <input
+                  className={styles.slider}
+                  type="range"
+                  min={20}
+                  max={100}
+                  step={1}
+                  value={Math.round(backgroundBrightness * 100)}
+                  aria-label={t('Background brightness')}
+                  onChange={(e) => setBackgroundBrightness(Number(e.target.value) / 100)}
+                  onMouseUp={commitBackgroundSliders}
+                  onTouchEnd={commitBackgroundSliders}
+                  onBlur={commitBackgroundSliders}
+                />
+                <span className={styles.monoValue}>{Math.round(backgroundBrightness * 100)}%</span>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        {/* ── Appearance ──────────────────────────────────────── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Appearance') /* >Appearance< */}</h3>
+          {/* Appearance & feel: "Realistic typing" pacing. On by default. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Realistic typing')}
+              <InfoTip
+                label={t('About realistic typing')}
+                text={t(
+                  'Pauses to read your message, then paces typing to a human speed, in chat and in-game. Off replies instantly.',
+                )}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Realistic typing')}
+              on={realisticTyping}
+              onChange={(v) => void onToggleRealisticTyping(v)}
+            />
+          </div>
+          {/* ui-A7: developer console toggle. Off by default — App.tsx gates
+              <LogsBar /> on this flag. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Developer console')}
+              <InfoTip
+                label={t('About the developer console')}
+                text={t('Useful for debugging skin and bot issues.')}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Show developer console')}
+              on={devConsoleVisible}
+              onChange={(v) => void onToggleDevConsole(v)}
+            />
+          </div>
+          {/* 260707: product-analytics opt-out. On by default; toggling off
+              stops all analytics immediately. See privacy.html. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Usage analytics')}
+              <InfoTip
+                label={t('About usage analytics')}
+                text={t(
+                  'Shares anonymous usage data (feature counts, versions, errors) to help improve Sei. Never your chats, characters, or personal info. Turn off any time.',
+                )}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Usage analytics')}
+              on={!analyticsOptOut}
+              onChange={(v) => void onToggleAnalytics(v)}
+            />
+          </div>
+          {/* Call captions (260705): live subtitle lines on the voice-call
+              screen. Off by default. Calls read as audio, not subtitles. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Call captions')}
+              <InfoTip
+                label={t('About call captions')}
+                text={t(
+                  'Shows live captions during voice calls: what the companion said and what Sei heard you say.',
+                )}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Call captions')}
+              on={callCaptions}
+              onChange={() => void onToggleCallCaptions()}
+            />
+          </div>
+          {/* Avatar overlay (260804, grew out of the 260706 call overlay):
+              always-on-top companion tiles (static portrait or Live2D). Three
+              levels: off / during activity (calls, games, screenshare,
+              Minecraft) / always while the app is open. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Avatar')}
+              <InfoTip
+                label={t('About the avatar')}
+                text={t(
+                  'Floats your companion on top of every app: their picture, or a Live2D model from their profile. "When active" shows it during calls, games, screensharing and Minecraft; "Always" keeps it up while Sei is open. Hover it to move or resize.',
+                )}
+              />
+            </span>
+            <Seg<AvatarMode>
+              aria-label={t('Avatar')}
+              options={[
+                { value: 'off', label: t('Off') },
+                { value: 'activity', label: t('When active') },
+                { value: 'always', label: t('Always') },
+              ]}
+              value={avatarMode}
+              onChange={(next) => void onSelectAvatarMode(next)}
+            />
+          </div>
+          {/* Conversation starters (260707): on a quiet call, a companion may
+              bring up a topic on its own. On by default. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Conversation starters')}
+              <InfoTip
+                label={t('About conversation starters')}
+                text={t(
+                  'When a voice call goes quiet for a bit, your companion can bring up a topic on their own instead of waiting for you to speak.',
+                )}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Conversation starters')}
+              on={convoStartersEnabled}
+              onChange={() => void onToggleConvoStarters()}
+            />
+          </div>
+        </div>
+
+        {/* ── About ───────────────────────────────────────────── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('About') /* >About< */}</h3>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Version')}</span>
+            <span className={styles.value}>
+              {versionValue}
+              {appVersion && versionStatus ? (
+                <>
+                  {' · '}
+                  <span className={versionStatus.cls}>{versionStatus.text}</span>
+                </>
+              ) : null}
+            </span>
+            <Button
+              kind="ghost"
+              size="sm"
+              disabled={updateStatus === 'checking'}
+              onClick={() => {
+                setUpdateStatus('checking');
+                void sei.checkForUpdates();
+              }}
+            >
+              {t('Check now')}
+            </Button>
+          </div>
+          {/* Advanced updates: opt into the beta channel. Off by default so a
+              normal user is never moved onto a pre-release build. */}
+          <div className={styles.row}>
+            <span className={styles.label}>
+              {t('Advanced updates')}
+              <InfoTip
+                label={t('About advanced updates')}
+                text={t(
+                  'Get beta releases early, before they roll out to everyone. Betas are less tested and may have rough edges. Leave this off for the stable version.',
+                )}
+              />
+            </span>
+            <Toggle
+              aria-label={t('Advanced updates')}
+              on={advancedUpdates}
+              onChange={(v) => void onToggleAdvancedUpdates(v)}
+            />
+          </div>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Terms of Service')}</span>
+            <Button
+              kind="ghost"
+              size="sm"
+              onClick={() => void sei.openExternal('https://sei.gg/terms.html')}
+            >
+              {t('Open')}
+            </Button>
+          </div>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Privacy Policy')}</span>
+            <Button
+              kind="ghost"
+              size="sm"
+              onClick={() => void sei.openExternal('https://sei.gg/privacy.html')}
+            >
+              {t('Open')}
+            </Button>
+          </div>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Report copyright infringement (DMCA)')}</span>
+            <Button kind="ghost" size="sm" onClick={() => setDmcaModalOpen(true)}>
+              {t('Open')}
+            </Button>
+          </div>
+          <p className={styles.helper}>
+            {t('Photo credits: Minecraft artwork by Mojang Studios. Movie night photo by')}{' '}
+            <button
+              type="button"
+              className={styles.creditLink}
+              onClick={() =>
+                void sei.openExternal(
+                  'https://americanretirementhomes.org/movie-nights-and-in-house-entertainment-options/',
+                )
+              }
+            >
+              American Retirement Homes
+            </button>{' '}
+            {t('(CC licensed).')}
+          </p>
+          <p className={styles.helper}>
+            {t('Speech recognition: SenseVoice-Small by FunAudioLLM (Alibaba),')}{' '}
+            <button
+              type="button"
+              className={styles.creditLink}
+              onClick={() =>
+                void sei.openExternal(
+                  'https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE',
+                )
+              }
+            >
+              {t('FunASR Model License')}
+            </button>
+            {t('. English voice: trained on LibriTTS-R,')}{' '}
+            <button
+              type="button"
+              className={styles.creditLink}
+              onClick={() =>
+                void sei.openExternal('https://creativecommons.org/licenses/by/4.0/')
+              }
+            >
+              CC BY 4.0
+            </button>
+            {t(
+              ', via Piper; converted to ONNX. Chinese voice: trained on AISHELL-3 by Beijing Shell Shell Technology,',
+            )}{' '}
+            <button
+              type="button"
+              className={styles.creditLink}
+              onClick={() =>
+                void sei.openExternal('https://www.apache.org/licenses/LICENSE-2.0')
+              }
+            >
+              {t('Apache License 2.0')}
+            </button>
+            {t(', via icefall.')}
+          </p>
+        </div>
+
+        {/* ── Danger ──────────────────────────────────────────── */}
+        <div className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('Danger') /* >Danger< */}</h3>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Reset all companion memories')}</span>
+            <Button
+              kind="danger"
+              size="sm"
+              disabled={resetAllProgress !== null || allCharacters.length === 0}
+              onClick={onResetAllMemoriesClick}
+            >
+              {resetAllLabel}
+            </Button>
+          </div>
+          <p className={styles.helper}>
+            {t(
+              'Wipes saved chat history and playtime for every companion on this device. Persona, portrait, and skin are kept.',
+            )}
+          </p>
+          {resetAllError ? (
+            <p className={`${styles.helper} ${styles.helperError}`} role="alert">
+              {resetAllError}
+            </p>
+          ) : null}
+          {authState.kind === 'signed_in' ? (
+            <>
+              <div className={styles.row}>
+                <span className={styles.label}>{t('Delete account')}</span>
+                <Button
+                  kind="danger"
+                  size="sm"
+                  onClick={() => {
+                    if (authState.kind === 'signed_in') {
+                      setDeleteAccountState({ email: authState.user.email });
+                    }
+                  }}
+                >
+                  {t('Delete account…')}
+                </Button>
+              </div>
+              <p className={styles.helper}>
+                {t('Permanently deletes your cloud data within 30 days. Local files stay.')}
+              </p>
+            </>
+          ) : null}
+          <div className={styles.row}>
+            <span className={styles.label}>{t('Factory reset')}</span>
+            <Button kind="danger" size="sm" onClick={() => setFactoryResetOpen(true)}>
+              {t('Factory reset…')}
+            </Button>
+          </div>
+          <p className={styles.helper}>
+            {t(
+              'Erases everything on this device and restarts Sei like a fresh install. Cloud data stays on your account.',
+            )}
+          </p>
+        </div>
+      </div>
+
+      {verifyModalOpen && authState.kind === 'signed_in' ? (
+        <VerifyEmailModal
+          email={authState.user.email}
+          onClose={() => setVerifyModalOpen(false)}
+        />
+      ) : null}
+      {signOutModalOpen ? (
+        <SignOutConfirmModal
+          botRunning={botRunning}
+          onCancel={() => setSignOutModalOpen(false)}
+          onConfirm={async () => {
+            await sei.signOut();
+            setSignOutModalOpen(false);
+          }}
+        />
+      ) : null}
+      {/*
+        WR-10: gated only on the captured deleteAccountState, NOT authState.kind.
+        Once the modal opens we hold the email locally so the modal can render
+        its 1200ms "Account scheduled for deletion. Signing you out…" state even
+        after supabase.auth.signOut() flips authState.kind to 'local'.
+      */}
+      {deleteAccountState ? (
+        <DeleteAccountModal
+          accountEmail={deleteAccountState.email}
+          onCancel={() => setDeleteAccountState(null)}
+          onConfirmed={() => setDeleteAccountState(null)}
+        />
+      ) : null}
+      {migrateModalOpen ? (
+        <MigrateLocalCharsModal onClose={() => setMigrateModalOpen(false)} />
+      ) : null}
+      {pendingSwitch ? (
+        <SwitchBackendConfirmModal
+          direction={pendingSwitch}
+          via={switchVia ?? undefined}
+          onCancel={() => {
+            setPendingSwitch(null);
+            setSwitchVia(null);
+          }}
+          onConfirm={confirmSwitch}
+        />
+      ) : null}
+      {resetAllModalOpen ? (
+        <ResetAllMemoriesConfirmModal
+          characterCount={allCharacters.length}
+          onCancel={() => setResetAllModalOpen(false)}
+          onConfirm={runResetAllMemories}
+        />
+      ) : null}
+      {dmcaModalOpen ? <DmcaContactModal onClose={() => setDmcaModalOpen(false)} /> : null}
+      {factoryResetOpen ? (
+        <FactoryResetConfirmModal onCancel={() => setFactoryResetOpen(false)} />
+      ) : null}
+      {/* W5: shared "Download? (XX MB)" confirm for voice packs + SenseVoice.
+          Size comes from the pack registry via the status push, never a
+          hardcoded number. */}
+      {pendingPack && packStates[pendingPack.id] ? (
+        <DownloadConfirmModal
+          name={pendingPack.name}
+          bytes={packStates[pendingPack.id].bytes}
+          onCancel={() => setPendingPack(null)}
+          onConfirm={() =>
+            void startPackDownload(pendingPack.id, pendingPack.thenSensevoice === true)
+          }
+        />
+      ) : null}
+    </div>
+  );
+}
+

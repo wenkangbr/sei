@@ -1,0 +1,229 @@
+// src/adapter/minecraft/fsmWires.js
+//
+// Mineflayer event wires: subscribe to bot events and translate them into
+// AdapterHandlers shape (see src/brain/types.js). Brain-side createPriorityQueue
+// then routes those handler calls into the prioritized event pipeline.
+//
+// The synthesized events (sei:chat_received, sei:attacked, sei:joined,
+// sei:loop_terminal) are produced by src/adapter/minecraft/behaviors/{chat,
+// combat}.js and src/bot.js / src/brain/orchestrator.js respectively. This
+// module is a thin translation layer — no business logic.
+
+/**
+ * Wire a mineflayer bot's event surface to a brain-shaped AdapterHandlers
+ * object. The handlers receive normalized payloads (e.g. `text` instead of
+ * `message`, `attackerLabel` collapsed) so brain code stays game-agnostic.
+ *
+ * @param {object} bot                              Mineflayer bot instance.
+ * @param {import('../../brain/types.js').AdapterHandlers} handlers
+ * @param {{ config?: object }} [opts]
+ * @returns {() => void} A dispose function that removes every listener.
+ */
+export function wireBotEvents(bot, handlers, _opts = {}) {
+  if (!bot) throw new Error('wireBotEvents: bot required')
+  if (!handlers) throw new Error('wireBotEvents: handlers required')
+
+  // ── Chat ────────────────────────────────────────────────────────────
+  // chat.js (behaviors/chat.js) does the player/addressed/nearby filtering
+  // and emits sei:chat_received. We translate that synthesized event to
+  // handlers.onChat with brain-shaped keys.
+  const onSeiChat = (payload) => {
+    if (!payload) return
+    try {
+      handlers.onChat?.({
+        username: payload.username,
+        text: payload.message ?? payload.text ?? '',
+        playerSpoke: !!payload.playerSpoke,
+        // 260925: a sibling AI's line (transcript labels it by name, not as the player).
+        fromCompanion: payload.fromCompanion === true,
+        addressed: !!payload.addressed,
+        nearby: payload.nearby !== false,  // chat.js only emits when at least one of player/addressed/nearby holds
+        // 260618: when set, the brain records this line to history but does NOT
+        // wake on it (message aimed at a sibling companion, or a sibling's own
+        // chatter). See behaviors/chat.js.
+        suppressInterrupt: !!payload.suppressInterrupt,
+      })
+    } catch (err) {
+      // Swallow listener errors so a brain-side throw doesn't crash mineflayer.
+      console.error?.(`[sei/wires] onChat handler threw: ${err && err.message}`)
+    }
+  }
+  bot.on('sei:chat_received', onSeiChat)
+
+  // ── Attacked ────────────────────────────────────────────────────────
+  // combat.js emits sei:attacked with the attacker payload pre-classified.
+  const onSeiAttacked = (payload) => {
+    if (!payload) return
+    try {
+      handlers.onAttacked?.({
+        attacker: payload.attacker ?? null,
+        attackerLabel: payload.attackerLabel
+          ?? payload.attacker?.username
+          ?? payload.attacker?.name
+          ?? 'unknown',
+        attackerKind: payload.attackerKind
+          ?? (payload.attacker?.username ? 'player' : 'mob'),
+        // Forward the live PvP flag (combat.js stamps it) so the prompt addendum
+        // can pick "hit back" vs "can't hit back" framing on a player hit.
+        pvp: !!payload.pvp,
+        // 261011: the brain's mid-action coalescing lets a falling health
+        // value through inside its window.
+        health: Number.isFinite(bot.health) ? bot.health : undefined,
+      })
+    } catch (err) {
+      console.error?.(`[sei/wires] onAttacked handler threw: ${err && err.message}`)
+    }
+  }
+  bot.on('sei:attacked', onSeiAttacked)
+
+  // ── Owner under attack (260730) ─────────────────────────────────────────
+  // combat.js emits sei:owner_attacked when a hostile mob hits the PLAYER
+  // within range of the bot. It rides the onAttacked route tagged
+  // attackerKind:'defend', which lands it at P1_CHAT (attackedPriority) — the
+  // bot is not the one in danger, and the swing that pulls the mob's aggro
+  // already happened in combat.js, so this turn is narration plus an optional
+  // escalation, never a panic that preempts the player's own reply.
+  const onSeiOwnerAttacked = (payload) => {
+    if (!payload) return
+    try {
+      handlers.onAttacked?.({
+        attacker: payload.attacker ?? null,
+        attackerLabel: payload.attackerLabel ?? payload.attacker?.name ?? 'a mob',
+        attackerKind: 'defend',
+        ownerLabel: payload.ownerLabel ?? 'the player',
+        distance: typeof payload.distance === 'number' ? payload.distance : null,
+        engaged: !!payload.engaged,
+        // 261012: the pre-hit owner-threat watch (combat.js) and the counts the
+        // defend turn needs to pick its move.
+        threat: payload.threat === true,
+        ownerDistance: typeof payload.ownerDistance === 'number' ? payload.ownerDistance : null,
+        ownerHp: typeof payload.ownerHp === 'number' ? payload.ownerHp : null,
+        count: typeof payload.count === 'number' ? payload.count : null,
+        othersOnOwner: typeof payload.othersOnOwner === 'number' ? payload.othersOnOwner : 0,
+        actionOnIt: payload.actionOnIt === true,
+      })
+    } catch (err) {
+      console.error?.(`[sei/wires] onOwnerAttacked handler threw: ${err && err.message}`)
+    }
+  }
+  bot.on('sei:owner_attacked', onSeiOwnerAttacked)
+
+  // ── Reflex (proactive threat warning) ───────────────────────────────
+  // reflex.js (behaviors/reflex.js) emits sei:reflex once per engagement when
+  // the survival loop evades a creeper/arrow/melee threat. We translate it onto
+  // the onAttacked route but tag attackerKind:'reflex' (plus the threat label,
+  // the `noticed` telegraph flag and nearby `count`). The 'reflex' tag makes the
+  // brain route it at CONVERSATION tier (P1_CHAT), not safety tier — onAttacked
+  // in src/bot/brain/index.js uses attackedPriority(evt) so a proactive warning
+  // never preempts or aborts a pending/in-flight player chat (a real attack
+  // stays P0_SAFETY). It also drives Plan 05's prompt framing to phrase it as a
+  // proactive warning offering attack()/explore() rather than "you were hit".
+  // Thin translation only — this does NOT enqueue evasion work; the flee already
+  // ran in reflex.js's tick.
+  const onSeiReflex = (payload) => {
+    if (!payload) return
+    try {
+      handlers.onAttacked?.({
+        attacker: payload.entity ?? payload.threat ?? null,
+        attackerLabel: payload.threatLabel
+          ?? payload.threat?.name
+          ?? 'a threat',
+        attackerKind: 'reflex',
+        noticed: !!payload.noticed,
+        count: typeof payload.count === 'number' ? payload.count : 1,
+      })
+    } catch (err) {
+      console.error?.(`[sei/wires] onReflex handler threw: ${err && err.message}`)
+    }
+  }
+  bot.on('sei:reflex', onSeiReflex)
+
+  // ── Survival takeover (drowning / critical-HP retreat) ──────────────
+  // survival.js emits sei:survival once per automatic engagement (swimming up
+  // for air, or fleeing a hostile at low HP). We route it onto the SAME onAttacked
+  // path as reflex, tagged attackerKind:'reflex' so it lands at P1_CHAT (never
+  // preempts a player chat), plus a `survivalKind` so the prompt framing
+  // (SURVIVAL_ADDENDUM) describes drowning/retreat instead of a threat dodge. The
+  // physical response already ran in survival.js's tick — this is narration only.
+  const onSeiSurvival = (payload) => {
+    if (!payload) return
+    try {
+      handlers.onAttacked?.({
+        attacker: null,
+        attackerLabel: payload.threatLabel ?? 'danger',
+        attackerKind: 'reflex',
+        survivalKind: payload.kind ?? 'critical_retreat',
+        count: typeof payload.count === 'number' ? payload.count : 1,
+      })
+    } catch (err) {
+      console.error?.(`[sei/wires] onSurvival handler threw: ${err && err.message}`)
+    }
+  }
+  bot.on('sei:survival', onSeiSurvival)
+
+  // ── Death ───────────────────────────────────────────────────────────
+  // connect.js emits sei:death once per death, snapshotting the death position
+  // BEFORE bot.respawn() teleports back to world spawn (that's where the bot's
+  // items dropped). Thin translation to handlers.onDeath; the brain enqueues it
+  // at P1_CHAT (see src/bot/brain/index.js) so it earns a prompt turn + a say()
+  // but never outranks a real P0 safety event.
+  // 261019 (pass 19): the payload also carries what she lost, when she died
+  // and the game's death message (behaviors/deathTracker.js); sei:dying is
+  // the instant of death, before the respawn.
+  const onSeiDeath = (payload) => {
+    const { pos = null, ...rest } = payload ?? {}
+    try { handlers.onDeath?.({ pos, ...rest }) }
+    catch (err) { console.error?.(`[sei/wires] onDeath handler threw: ${err && err.message}`) }
+  }
+  bot.on('sei:death', onSeiDeath)
+  const onSeiDying = () => {
+    try { handlers.onDying?.() }
+    catch (err) { console.error?.(`[sei/wires] onDying handler threw: ${err && err.message}`) }
+  }
+  bot.on('sei:dying', onSeiDying)
+
+  // ── Player join / leave ─────────────────────────────────────────────
+  const onPlayerJoined = (player) => {
+    if (!player) return
+    try { handlers.onPlayerJoined?.({ username: player.username, uuid: player.uuid }) }
+    catch (err) { console.error?.(`[sei/wires] onPlayerJoined handler threw: ${err && err.message}`) }
+  }
+  const onPlayerLeft = (player) => {
+    if (!player) return
+    try { handlers.onPlayerLeft?.({ username: player.username, uuid: player.uuid }) }
+    catch (err) { console.error?.(`[sei/wires] onPlayerLeft handler threw: ${err && err.message}`) }
+  }
+  bot.on('playerJoined', onPlayerJoined)
+  bot.on('playerLeft', onPlayerLeft)
+
+  // ── Spawn ───────────────────────────────────────────────────────────
+  // Forward every spawn (initial + respawn). Brain.start uses the first one
+  // for session settle; subsequent spawns are no-ops on the brain side
+  // unless wired.
+  const onSpawn = () => {
+    try { handlers.onSpawn?.() }
+    catch (err) { console.error?.(`[sei/wires] onSpawn handler threw: ${err && err.message}`) }
+  }
+  bot.on('spawn', onSpawn)
+
+  // ── Synthetic events forwarded from orchestrator / bot connect ──────
+  // sei:joined fires once on connect (initial greeting nudge).
+  // sei:loop_terminal fires when the orchestrator finishes a Loop.
+  // sei:loop_end is the follow-up tick the brain enqueues at P2.5.
+  // These are reflected back on the bot bus by brain logic; the wires
+  // listen so adapter consumers (e.g. logging) can observe them, but the
+  // primary consumer is the brain itself which already emits them.
+
+  return function dispose() {
+    try { bot.off?.('sei:chat_received', onSeiChat) } catch {}
+    try { bot.off?.('sei:attacked', onSeiAttacked) } catch {}
+    try { bot.off?.('sei:owner_attacked', onSeiOwnerAttacked) } catch {}
+    try { bot.off?.('sei:reflex', onSeiReflex) } catch {}
+    try { bot.off?.('sei:survival', onSeiSurvival) } catch {}
+    try { bot.off?.('sei:death', onSeiDeath) } catch {}
+    try { bot.off?.('sei:dying', onSeiDying) } catch {}
+    try { bot.off?.('playerJoined', onPlayerJoined) } catch {}
+    try { bot.off?.('playerLeft', onPlayerLeft) } catch {}
+    try { bot.off?.('spawn', onSpawn) } catch {}
+  }
+}

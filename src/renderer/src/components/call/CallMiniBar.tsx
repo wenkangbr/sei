@@ -1,0 +1,116 @@
+/**
+ * CallMiniBar — the app-level call watchdog (260722 rework). Renders nothing
+ * except the call-level popups that must survive every view (260810: the
+ * inactivity "Are you still there?" popup — hosted here precisely because
+ * this component is mounted in the App shell on every screen, so the popup
+ * overlays the call view, game surfaces, backdrop scenes, and any other
+ * screen the player wandered to while the call runs in the background).
+ * The old docked CallDock strip is gone: while a game surface is open the
+ * in-game call UI lives inside GameSurface's bottom chrome row instead.
+ *
+ * Always mounted in the App shell so one responsibility survives every view:
+ *
+ *   Auto-return: when the LAST open game surface drops while a call session
+ *   exists and the fullscreen call view is not on screen, restore the call
+ *   view (spec: "ending the game returns the call to its normal fullscreen
+ *   surface").
+ *
+ *   Pending share (260803): the chat header's Backseat button arms a share and
+ *   routes into a call; this starts it once that call is actually live. It
+ *   belongs here rather than on VoiceCallScreen because that screen can unmount
+ *   before the call connects: dialing takes seconds, longer behind the voice
+ *   module's install gate, and the player is free to go back to chat while it
+ *   rings (the call keeps running). A consumer that unmounts with it would drop
+ *   the share silently. This watchdog is mounted on every view and already
+ *   watches exactly the two values the decision needs.
+ *
+ * On non-chat views with a call running there is deliberately no floating
+ * call UI: the icon-rail activity badge is the ambient indicator, and
+ * clicking the character (or the chat top bar's phone) returns to the call.
+ */
+
+import React, { useEffect, useRef } from 'react';
+import { CallInactivityPopup } from './CallInactivityPopup';
+import { MicAccessCard } from '../permissions/MicAccessCard';
+import { useUiStore } from '../../lib/stores/useUiStore';
+import { useVoiceStore } from '../../lib/stores/useVoiceStore';
+import { useDataStore } from '../../lib/stores/useDataStore';
+import { useChessStore, isChessOpen } from '../../lib/stores/useChessStore';
+import { useMcDashboardStore } from '../../lib/stores/useMcDashboardStore';
+import { useDrawStore, isDrawActive } from '../../lib/stores/useDrawStore';
+import { useBackseatStore } from '../../lib/stores/useBackseatStore';
+
+export function CallMiniBar(): React.ReactElement {
+  const view = useUiStore((s) => s.view);
+  const navigate = useUiStore((s) => s.navigate);
+  const participants = useVoiceStore((s) => s.participants);
+  const status = useVoiceStore((s) => s.status);
+  // 260929: a dial held up by microphone access redials by itself once access
+  // is on (MicAccessCard), so an armed share waits for that instead of being
+  // dropped with the error. Its own TTL still bounds the wait.
+  const micBlocked = useVoiceStore((s) => s.micBlocked !== null);
+  const summons = useDataStore((s) => s.summons);
+  const chessState = useChessStore((s) => s);
+  const mcDashState = useMcDashboardStore((s) => s);
+  const drawState = useDrawStore((s) => s);
+  const backseatActive = useBackseatStore((s) => s.active);
+  const pendingShare = useBackseatStore((s) => s.pendingShare);
+  const clearPendingShare = useBackseatStore((s) => s.clearPendingShare);
+  const consumePendingShare = useBackseatStore((s) => s.consumePendingShare);
+
+  const callExists = participants.length > 0 && (status === 'live' || status === 'connecting');
+  const awayFromCall = callExists && view.kind !== 'voice-call';
+
+  // Any OPEN game surface among the call's participants (chess panel or a
+  // game, the Minecraft dashboard or launch panel, a Draw! game in play, a
+  // backseat session). Surface-open (not game-live) on purpose: a resigned
+  // chess game still shows its result screen, and the call should only
+  // reclaim the screen once the surface is actually gone (the unified end
+  // "x").
+  const gameActive = participants.some((id) => {
+    if (isChessOpen(chessState, id)) return true;
+    if (isDrawActive(drawState, id)) return true;
+    if (backseatActive[id] === true) return true;
+    const online = summons[id]?.kind === 'online';
+    // The Minecraft dashboard is always open while the bot is online (no
+    // hide/minimize, 260721); offline, the launch panel counts while open.
+    return online || mcDashState.launch[id] != null;
+  });
+
+  // Ending the game returns the call to its fullscreen surface: when the last
+  // open game surface drops while the call is elsewhere, restore the call view.
+  const prevGameActive = useRef(false);
+  useEffect(() => {
+    const was = prevGameActive.current;
+    prevGameActive.current = gameActive;
+    if (was && !gameActive && awayFromCall && participants.length > 0) {
+      navigate({ kind: 'voice-call', characterId: participants[0] });
+    }
+  }, [gameActive, awayFromCall, participants, navigate]);
+
+  // Armed share → live call. 'live' and not 'connecting': the capture pipeline
+  // and the call's turn loop are the same conversation (useVoiceStore routes a
+  // player utterance THROUGH the share), so starting the share against a call
+  // that has not finished connecting would attach the grid to a session that is
+  // still being built. A dial that ends in 'error' will never reach 'live', so
+  // the arm is dropped there rather than left to time out.
+  useEffect(() => {
+    if (!pendingShare) return;
+    if (status === 'error') {
+      if (!micBlocked) clearPendingShare();
+      return;
+    }
+    if (status !== 'live') return;
+    if (!participants.includes(pendingShare.characterId)) return;
+    void consumePendingShare(pendingShare.characterId);
+  }, [pendingShare, status, micBlocked, participants, clearPendingShare, consumePendingShare]);
+
+  // 260929: the microphone card rides the same always-mounted host, so a call
+  // held up by mic access is explained on whatever view it was dialed from.
+  return (
+    <>
+      <CallInactivityPopup />
+      <MicAccessCard />
+    </>
+  );
+}

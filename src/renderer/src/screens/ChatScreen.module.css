@@ -1,0 +1,868 @@
+/* ChatScreen — Discord-style in-app chat (Phase 18/19).
+ * "Summoning Terminal" look: sharp edges, periwinkle accent, no bubbles.
+ * All values from tokens.css — no literal hex/px colors. */
+
+/* 260721 top/bottom split: the shared ChatTopBar (its styles live in
+ * ChatTopBar.module.css) sits above a row of [mainCol | presence panel];
+ * mainCol stacks the GAME AREA on top of the chat column. */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--window);
+}
+
+/* 260724: with a custom background active, <main> already paints the tint the
+   whole app uses, so the chat root's opaque fill would just block the image.
+   Drop it and let the shared tint show through. */
+:root[data-app-bg] .root {
+  background: transparent;
+}
+
+/* Everything under the top bar: main column + the presence side panel. */
+.content {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Game area over chat column. */
+.mainCol {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The message column owns the absolute-positioned floating composer, so it is
+   the positioning context. */
+.chatCol {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Message list ───────────────────────────────────────────────────────── */
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 260917: the composer dock is in-flow BELOW the list now (it used to float
+     over it), so the list ends where the dock begins and no message can sit
+     under or beside the message box. A thin bottom pad keeps the latest row
+     off the dock. */
+  padding: var(--space-lg) var(--space-lg) var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  /* No inter-row gap — vertical rhythm comes from each row's own padding, so
+     consecutive same-author "double texts" stack tightly like Discord (#4). */
+  gap: 0;
+}
+
+/* (260917) .listTyping no longer needs extra bottom room: the dock is in-flow,
+   so a taller dock (typing line, reply bar) simply takes its own space. */
+.listTyping {
+  padding-bottom: var(--space-sm);
+}
+
+/* Scrollbar hidden at rest — the thumb shows only while actively scrolling
+   (ChatScreen sets data-scrolling during scroll, clears it after idle). */
+.list::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.list[data-scrolling]::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+.list[data-scrolling]::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+.empty {
+  margin: auto;
+  text-align: center;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ── Loading skeleton ───────────────────────────────────────────────────── */
+/* Wireframe transcript shown while history is fetching (before any bubble can
+ * pop in). Mirrors the real row layout — 40px avatar gutter + text — so nothing
+ * jumps when messages land. Static by design (260705) — no shimmer sweep. */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.skelRowLead,
+.skelRowCont {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  column-gap: var(--space-md);
+}
+
+.skelRowLead {
+  align-items: start;
+}
+
+.skelAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg3);
+}
+
+.skelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.skelName {
+  height: 11px;
+  width: 96px;
+  background: var(--border);
+}
+
+.skelBar {
+  height: 13px;
+  background: var(--border);
+}
+
+/* A message row that starts a new author run: avatar gutter + header + text.
+ * A small top margin separates author groups (now that .list has no row gap);
+ * the negative side margins bleed the hover highlight to the list edges (#4). */
+.rowLead {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  column-gap: var(--space-md);
+  margin: var(--space-sm) calc(-1 * var(--space-lg)) 0;
+  /* Bottom pad matches .rowCont (1px) so the gap between the header line and the
+   * first continuation line is the same as the gaps between later lines. The
+   * 40px avatar sits alongside the header + first text (never taller than them),
+   * so it does not add space of its own. */
+  padding: var(--space-xs) var(--space-lg) 1px;
+}
+
+/* A continuation row (same author): no avatar, text aligned to the gutter.
+ * Tight vertical padding keeps "double texts" close (#4). */
+.rowCont {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  column-gap: var(--space-md);
+  margin: 0 calc(-1 * var(--space-lg));
+  padding: 1px var(--space-lg);
+}
+
+/* Change #9 — hover shade on the whole row. */
+.rowLead:hover,
+.rowCont:hover {
+  background: var(--accent-soft);
+}
+
+.avatarCell {
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.msgBody {
+  min-width: 0;
+}
+
+/* #1 — Discord-style quoted-reply reference. It spans the FULL row above the
+ * message (grid-column 1 / -1) and is indented to the message-body gutter, so
+ * the avatar below aligns with the author header instead of overlapping the
+ * quote. An elbow connector drops from the quote down into the avatar. */
+.quoteRef {
+  position: relative;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: 2px;
+  padding-left: calc(40px + var(--space-md));
+  min-width: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quoteRef::before {
+  content: '';
+  position: absolute;
+  /* ~centre of the 40px avatar that sits directly below. */
+  left: 19px;
+  top: 50%;
+  bottom: -12px;
+  width: calc(40px + var(--space-md) - 19px);
+  border-left: 2px solid var(--border-strong);
+  border-top: 2px solid var(--border-strong);
+  border-top-left-radius: 8px;
+}
+
+.quoteAvatar {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.quoteName {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.quoteText {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.msgHeader {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-bottom: 2px;
+}
+
+/* Change #8 — companion name is white/text-colored, same as the user. §4.5 —
+   it is a button: clicking an author's name swaps the presence panel card. */
+.authorName {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.authorName:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.timestamp {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+}
+
+.msgText {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Change #9 — per-message copy / reply cluster, revealed on row hover, pinned
+ * to the right of the row. Sharp hairline surface chip (Summoning Terminal). */
+.rowActions {
+  position: absolute;
+  top: 6px;
+  right: var(--space-md);
+  display: inline-flex;
+  background: var(--surface-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms var(--ease);
+}
+
+.rowLead:hover .rowActions,
+.rowCont:hover .rowActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Borderless "quiet" icon button — muted, lights to accent on hover (§5). */
+.rowActionBtn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 120ms var(--ease), background 120ms var(--ease);
+}
+
+.rowActionBtn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Change #7 — day separator: "───── 17 Apr 2026 ─────". */
+.daySeparator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin: var(--space-md) 0 var(--space-xs);
+}
+
+.daySeparator::before,
+.daySeparator::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-strong);
+}
+
+.daySeparatorLabel {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Defensive: centered system note (none persisted today). */
+.systemRow {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: var(--space-sm) 0;
+}
+
+/* Play-session row (Discord-style "You and X played Minecraft for Y") — the
+   general game icon sits in the avatar gutter, greyed text aligns with the chat
+   messages and matches the author-name font/size (left-aligned, not centered). */
+.playRow {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  column-gap: var(--space-md);
+  align-items: center;
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 15px;
+  letter-spacing: normal;
+  color: var(--muted);
+  margin: var(--space-sm) calc(-1 * var(--space-lg)) 0;
+  /* 260725: same vertical rhythm as .rowLead (4px top, 1px bottom, 8px
+     margin), so the gap between two consecutive session rows is the SAME 13px
+     as the gap between a session row and a message, or between messages from
+     two different authors. The old symmetric 4px bottom made stacked session
+     rows sit 3px further apart than everything else around them. */
+  padding: var(--space-xs) var(--space-lg) 1px;
+}
+
+.playIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  color: var(--muted);
+  flex: none;
+}
+
+/* Chess rows carrying the recorded game are a button that opens the replay
+   (260724). Same layout as .playRow plus a right-aligned hint revealed on
+   hover, with the message-row hover shade. */
+.playRowClickable {
+  grid-template-columns: 40px 1fr auto;
+  width: calc(100% + 2 * var(--space-lg));
+  appearance: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.playRowClickable:hover {
+  background: var(--accent-soft);
+  color: var(--text-2);
+}
+
+.replayHint {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.playRowClickable:hover .replayHint,
+.playRowClickable:focus-visible .replayHint {
+  opacity: 1;
+}
+
+/* ── Composer dock (in-flow at the bottom of the chat column) ─────────────── */
+/* 260917: it used to be absolutely positioned over the list, with a solid
+   --window band to hide the messages scrolling behind it; over a custom app
+   background that band went transparent and the conversation showed under
+   and beside the message box. In-flow, the list is clipped where the dock
+   starts, so the background can show through and the messages cannot. */
+.composerDock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* Slightly wider message box — tighter side padding than the list gutter;
+   * the thin top padding keeps the latest message close to the message box. */
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  background: var(--window);
+  pointer-events: none;
+}
+
+.composerDock > * {
+  pointer-events: auto;
+}
+
+/* 260724: over a custom background the band goes fully invisible — the area
+   around the message box shows the background like everything else (the
+   composer itself stays opaque; since 260917 no message can scroll under it).
+   Without a background the band is --window on --window, invisible anyway. */
+:root[data-app-bg] .composerDock {
+  background: transparent;
+}
+
+/* #3 — transient "copied to clipboard" flash, centered above the message box. */
+.copiedToast {
+  pointer-events: none;
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--surface-2);
+  padding: 3px var(--space-sm);
+  margin-bottom: var(--space-xs);
+  animation: copiedFade 160ms var(--ease);
+}
+
+@keyframes copiedFade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Change #2 — "<name> is typing…" sits just above the composer. */
+.typingLine {
+  pointer-events: none;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+/* Change #9 — quoted-reply line on top of the message window. */
+.replyBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px var(--space-md);
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.replyName {
+  flex-shrink: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.replyQuote {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.replyClose {
+  -webkit-appearance: none;
+  appearance: none;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms var(--ease);
+}
+
+.replyClose:hover {
+  color: var(--red);
+}
+
+/* §4.5 — the boxed composer: --bg2 fill, input + accent send glyph. Still
+   hovers over the list via .composerDock. Borderless (260729): the fill alone
+   frames it, matching the borderless popup treatment. */
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--bg2);
+}
+
+.input {
+  flex: 1;
+  resize: none;
+  min-height: 26px;
+  max-height: 160px;
+  padding: 6px var(--space-sm);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.input::placeholder {
+  color: var(--muted-2);
+}
+
+/* §4.5 — the send button is a borderless accent GLYPH (mockup .send), mounted
+ * only when the draft is non-empty. Small enough it never grows the box. */
+.sendBtn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: color 140ms var(--ease);
+}
+
+.sendBtn:hover:not(:disabled) {
+  color: var(--accent-strong);
+}
+
+.sendBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Presence side panel (§4.5, mockup .pres-panel) ─────────────────────── */
+/* Collapsible 260px right column; width animates open/closed. Default CLOSED
+ * (260705). --pres-tint (set inline from the portrait's dominant color)
+ * washes the surface; unset → plain --bg2. */
+.presPanel {
+  width: 0;
+  flex: none;
+  background: color-mix(in srgb, var(--pres-tint, transparent) 20%, var(--bg2));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  transition: width 300ms var(--ease);
+}
+
+.presOpen .presPanel {
+  width: 260px;
+  overflow-y: auto;
+}
+
+/* Fixed-width inner so content doesn't reflow during the width transition. */
+.presInner {
+  width: 260px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.presArt {
+  height: 190px;
+  flex: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.presArtImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Face-biased crop anchor, same 18% convention as IconRail avatars. */
+  object-position: 50% 18%;
+}
+
+.presArtFallback {
+  color: var(--muted);
+}
+
+/* Bottom fade of the portrait art down into the panel fill (tinted to match
+ * the .presPanel wash). */
+.presFade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 50%,
+    color-mix(in srgb, var(--pres-tint, transparent) 20%, var(--bg2)) 100%
+  );
+}
+
+/* Close "x" pinned to the panel's top-right corner, above the portrait art
+ * (rendered after .presFade so it stacks on top). Same quiet glyph pattern as
+ * .replyClose / the chess panel's close button: muted at rest, red on hover. */
+.presClose {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  top: var(--space-xs);
+  right: var(--space-xs);
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms var(--ease);
+}
+
+.presClose:hover {
+  color: var(--red);
+}
+
+.presBody {
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presNameRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.presName {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 23px;
+  line-height: 1;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.presKind {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.presNow {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.presActions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Game area (260721 top/bottom split) ────────────────────────────────── */
+/* The game surface rides ON TOP of the chat, closed to zero height when no
+ * game is open. No divider hairline: the surfaces' own backgrounds carry the
+ * boundary (box/line minimalism pass). */
+.gameArea {
+  height: 0;
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg2);
+  transition: height 300ms var(--ease);
+}
+
+.gameOpen .gameArea {
+  /* 260917: taller by default (was 62% / 280px): most of the content height,
+   * but never squeeze the chat below a ~240px band (composer + a few lines).
+   * The user can drag the split down to the bottom to hide the chat entirely
+   * (ChatScreen snaps that into the expanded state). */
+  height: min(72%, calc(100% - 240px));
+}
+
+/* 260917: a game DASHBOARD with no user-dragged split sizes the game area to
+ * its content instead of a fraction of the window. The dashboards are laid
+ * out for the full picture (status row, instruments, inventory, portrait) and
+ * at 62% their scrolling .body hid the bottom rows; with the area at its
+ * natural height the percent chains inside (surface -> panel -> body) resolve
+ * to content and nothing scrolls. Capped so the chat keeps a 200px band; in
+ * a window too short for the cap the dashboard's own body scrolls again
+ * (measured: the max-height constrains the percent chain), which is the
+ * one case where scrolling is unavoidable. Only the dashboards get this: the
+ * chess scene and the launch panels paint absolute art and need a definite
+ * height. */
+.gameFit .gameArea {
+  height: auto;
+  max-height: calc(100% - 200px);
+}
+
+/* While a game is open the chat column clips: dragging the split near the
+ * bottom leaves a sliver of chat, and the in-flow composer must not spill
+ * out of it. */
+.gameOpen .chatCol {
+  overflow: hidden;
+}
+
+/* While a game is open the presence panel is force-collapsed (defined after
+ * `.presOpen .presPanel` on purpose: equal specificity, later rule wins). */
+.gameOpen .presPanel {
+  width: 0;
+  overflow: hidden;
+}
+
+/* ── Drag-resize split handle (260721) ──────────────────────────────────── */
+/* Zero-height boundary strip between the game area and the chat: it takes no
+ * layout space of its own; the ::after hit zone straddles the edge by 3px on
+ * each side (row-resize cursor), and the ::before hairline is invisible at
+ * rest, lighting up on hover / focus / drag (no fat divider bar). */
+.splitHandle {
+  position: relative;
+  height: 0;
+  flex: none;
+  z-index: 3;
+  outline: none;
+  touch-action: none;
+}
+
+.splitHandle::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -3px;
+  height: 6px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.splitHandle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms var(--ease);
+}
+
+.splitHandle:hover::before,
+.splitHandle:focus-visible::before,
+.splitDragging .splitHandle::before {
+  opacity: 1;
+}
+
+/* While a drag is in flight the height transition is off, so the split tracks
+ * the pointer 1:1 instead of fighting the 300ms animation. */
+.splitDragging .gameArea {
+  transition: none;
+}
+
+/* No stray text selection while dragging across the chat below. */
+.splitDragging {
+  user-select: none;
+}
+
+/* ── Expand-over-chat (260721) ──────────────────────────────────────────── */
+/* The GameSurface bottom-left "V" grows the game area to the full content
+ * height. Defined AFTER the .gameOpen rules on purpose: equal specificity,
+ * later rule wins. The chat column keeps flex: 1 with a zero floor, so the
+ * animated height squeezes it away smoothly. */
+.gameExpanded .gameArea {
+  height: 100%;
+}
+
+.gameExpanded .chatCol {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .presPanel {
+    transition: none;
+  }
+
+  .gameArea {
+    transition: none;
+  }
+}
+
+/* (260722) The docked call section between game and chat is gone: the in-game
+ * call UI lives inside GameSurface's bottom chrome row now. */

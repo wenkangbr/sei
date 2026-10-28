@@ -1,0 +1,1109 @@
+/**
+ * Inline SVG icons. Ported verbatim from .planning/.../design/project/ui.jsx.
+ *
+ * No icon font dependency, no external SVG sprite — just typed React components
+ * keyed by `size` (default 18) so callers can scale per-site (UI-SPEC sidebar
+ * lists per-icon sizes — HomeIcon 30, MCBlock 34, PlusIcon 26, etc.).
+ *
+ * `currentColor` propagation lets parent CSS drive icon color via `color: var(--accent)`.
+ */
+
+import React from 'react';
+
+interface IconProps {
+  size?: number;
+}
+
+export const HomeIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M3 11l9-7 9 7" />
+    <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
+  </svg>
+);
+
+/**
+ * RosterIcon — the mockup's "Summons / roster" nav glyph: a 2×2 grid of sharp
+ * squares (ui.jsx `Icon.roster`). This is the square home/roster icon the rail
+ * uses for the Home view; replaces the old rounded house so the rail matches
+ * the reference terminal.
+ */
+export const RosterIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.6}
+  >
+    <rect x={3} y={3} width={7} height={7} />
+    <rect x={14} y={3} width={7} height={7} />
+    <rect x={3} y={14} width={7} height={7} />
+    <rect x={14} y={14} width={7} height={7} />
+  </svg>
+);
+
+export const PlusIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+/** SearchIcon — magnifier, for search fields (261004, the Roblox pick step). */
+export const SearchIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l4.5 4.5" />
+  </svg>
+);
+
+/** CloseIcon — a plain x, for clearing a field. */
+export const CloseIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
+
+/**
+ * PricingIcon — wallet/credit glyph whose inner rect fills bottom-up based on
+ * `remainingPct` (0..100). Inherits theme color via `currentColor`.
+ *
+ * Used by IconRail.tsx as a conditional RailButton (only when
+ * `aiBackendKind === 'cloud-proxy'` — defense-in-depth BYOK bypass per
+ * PROXY-11; the icon is unmounted, NOT CSS-hidden).
+ *
+ * The inner fill rect carries a 200ms transition on `height` and `y` so
+ * percentage changes animate smoothly (D-54 UI affordance).
+ */
+interface PricingIconProps extends IconProps {
+  remainingPct?: number;
+}
+export const PricingIcon: React.FC<PricingIconProps> = ({
+  size = 24,
+  remainingPct = 0,
+}) => {
+  // Clamp to [0, 100] — defensive against transient out-of-range values from
+  // the server / store before init() completes.
+  const pct = Math.max(0, Math.min(100, remainingPct));
+  // Inner wallet body spans y=6..y=20 (height 14) in the 24-unit viewBox.
+  // The fill rect grows upward from the bottom (y=20) of that body.
+  const fillHeight = (pct / 100) * 14;
+  const fillY = 20 - fillHeight;
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      {/* Wallet flap (stroked top arc) */}
+      <path
+        d="M5 6V4.5A1.5 1.5 0 0 1 6.5 3h11A1.5 1.5 0 0 1 19 4.5V6"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Inner fill — clipped to the wallet body via stacking order (drawn
+          BEFORE the outline stroke so the outline frames it cleanly). */}
+      <rect
+        x={5}
+        y={fillY}
+        width={14}
+        height={fillHeight}
+        fill="currentColor"
+        opacity={0.4}
+        style={{ transition: 'height 200ms ease, y 200ms ease' }}
+      />
+      {/* Outer rounded wallet body (drawn last so its stroke is on top). */}
+      <rect
+        x={3}
+        y={6}
+        width={18}
+        height={14}
+        rx={2}
+        stroke="currentColor"
+        strokeWidth={1.5}
+        fill="none"
+      />
+    </svg>
+  );
+};
+
+/**
+ * SettingsIcon — the mockup's rail "settings" glyph: a two-track slider /
+ * equalizer (ui.jsx `Icon.settings`). Knobs are punched out with the window
+ * fill so the track reads through them. (The cog lives on as `GearIcon`, used
+ * by the per-character options menu on the detail screen.)
+ */
+export const SettingsIcon: React.FC<IconProps> = ({ size = 20 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.6}
+    strokeLinecap="round"
+  >
+    <line x1={4} y1={7} x2={20} y2={7} />
+    <circle cx={9} cy={7} r={2.4} fill="var(--bg)" />
+    <line x1={4} y1={17} x2={20} y2={17} />
+    <circle cx={15} cy={17} r={2.4} fill="var(--bg)" />
+  </svg>
+);
+
+interface ArrowIconProps extends IconProps {
+  dir?: 'right' | 'left' | 'up' | 'down';
+}
+export const ArrowIcon: React.FC<ArrowIconProps> = ({ size = 16, dir = 'right' }) => {
+  const rot = ({ right: 0, left: 180, up: -90, down: 90 } as const)[dir];
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ transform: `rotate(${rot}deg)` }}
+    >
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
+  );
+};
+
+export const GearIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx={12} cy={12} r={3} />
+    <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+  </svg>
+);
+
+/**
+ * Compact pencil for inline-edit affordances (name beside the title,
+ * description add-when-empty, etc.). Stroke-only so it picks up the
+ * surrounding text color via `currentColor`.
+ */
+export const PencilIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+  </svg>
+);
+
+/**
+ * UploadIcon — up-arrow over a tray. The Knowledge drop-zone glyph.
+ * Stroke-only, inherits currentColor.
+ */
+export const UploadIcon: React.FC<IconProps> = ({ size = 24 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 15V4" />
+    <path d="M7 9l5-5 5 5" />
+    <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+  </svg>
+);
+
+/**
+ * FileTextIcon — a sheet with a folded corner and text lines. Marks uploaded
+ * knowledge files in lists. Stroke-only, inherits currentColor.
+ */
+export const FileTextIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M14 2H6a1.5 1.5 0 0 0-1.5 1.5v17A1.5 1.5 0 0 0 6 22h12a1.5 1.5 0 0 0 1.5-1.5V7.5L14 2z" />
+    <path d="M14 2v5.5h5.5" />
+    <path d="M8.5 12h7M8.5 15.5h7M8.5 18.5h4" />
+  </svg>
+);
+
+/**
+ * NotePlusIcon — a sheet with a plus. The "Add text context" affordance in
+ * the Knowledge popup. Stroke-only, inherits currentColor.
+ */
+export const NotePlusIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M14 2H6a1.5 1.5 0 0 0-1.5 1.5v17A1.5 1.5 0 0 0 6 22h12a1.5 1.5 0 0 0 1.5-1.5V7.5L14 2z" />
+    <path d="M14 2v5.5h5.5" />
+    <path d="M12 11v6M9 14h6" />
+  </svg>
+);
+
+/**
+ * TrashIcon — delete affordance (knowledge entries, etc.). Stroke-only so it
+ * picks up the surrounding text color via `currentColor`.
+ */
+export const TrashIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 6h18" />
+    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+    <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
+
+/**
+ * Two-arrows-in-a-circle rotate / swap icon used to flip the persona ↔
+ * description sub-panes on CharacterPage. Stroke-only so it picks up the
+ * surrounding text color via `currentColor`.
+ */
+export const RotateIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="17 1 21 5 17 9" />
+    <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+    <polyline points="7 23 3 19 7 15" />
+    <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+  </svg>
+);
+
+export const SparkleIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 2l1.8 5.7L19.5 9.5l-5.7 1.8L12 17l-1.8-5.7L4.5 9.5l5.7-1.8L12 2z" />
+    <path
+      d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z"
+      opacity={0.7}
+    />
+  </svg>
+);
+
+/**
+ * StarIcon — four-point sparkle star. The IconRail Playtime affordance
+ * (260603): replaces the PricingIcon wallet/arc, which encoded remaining-percent
+ * in the glyph itself. The rail no longer surfaces a percent in the icon; the
+ * "~Xh left" estimate still shows in the button tooltip. Filled via currentColor
+ * so it inherits the rail's active/idle color tokens.
+ */
+export const StarIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    {/* Mockup `Icon.spark` — a sharp four-point diamond star (Mana glyph). */}
+    <path d="M12 2l1.6 7.4L21 11l-7.4 1.6L12 20l-1.6-7.4L3 11l7.4-1.6z" />
+  </svg>
+);
+
+/**
+ * RefreshIcon — circular-arrow reload glyph. Used for the manual playtime
+ * refresh affordance on CreditsScreen (260606). Stroke-only so it inherits the
+ * button's currentColor (quiet/muted → accent on hover).
+ */
+export const RefreshIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+    <path d="M21 3v6h-6" />
+  </svg>
+);
+
+export const SunIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx={12} cy={12} r={4} />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+  </svg>
+);
+
+export const MoonIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+  </svg>
+);
+
+export const BackIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M15 18l-6-6 6-6" />
+  </svg>
+);
+
+/**
+ * CompassIcon — IconRail "World" affordance. Matches the mockup's `Icon.world`
+ * globe (a circle crossed by an equator + two meridians) so the rail's World
+ * nav reads identically to the reference terminal. (Name kept for call-site /
+ * test stability; the glyph is the mockup globe.)
+ */
+export const CompassIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.6}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx={12} cy={12} r={9} />
+    <path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18" />
+  </svg>
+);
+
+/**
+ * CloudIcon — B3 IconRail credits-cluster affordance for `ai_backend_kind ===
+ * 'local'` users. Stroked cloud glyph using `currentColor`. Replaces the
+ * PricingIcon arc for users who haven't opted into the cloud proxy yet.
+ */
+export const CloudIcon: React.FC<IconProps> = ({ size = 26 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M7 18a4 4 0 0 1-.6-7.95 5 5 0 0 1 9.9-.49A4 4 0 1 1 17 18H7z" />
+  </svg>
+);
+
+/** The single-controller geometry both copies of GamepadIcon are drawn from. */
+const GAMEPAD_BODY =
+  'M17.5 6H6.5a4.5 4.5 0 0 0-4.46 3.9l-.8 5.6A2.4 2.4 0 0 0 3.6 18.2c.9 0 1.7-.5 2.1-1.3L6.5 15h11l.8 1.9c.4.8 1.2 1.3 2.1 1.3a2.4 2.4 0 0 0 2.36-2.7l-.8-5.6A4.5 4.5 0 0 0 17.5 6z';
+
+/**
+ * GamepadIcon — chat header "Games" affordance. TWO controllers, the second
+ * peeking out from behind the first, so the glyph reads as "play together"
+ * rather than "play". Both copies are the same geometry at 0.68 scale, offset
+ * along a diagonal.
+ *
+ * The glyph is STROKED, so the front controller's interior is transparent and
+ * the back one would otherwise show straight through it. A mask crops the back
+ * copy against the front's silhouette, filled and stroked wide enough to leave
+ * a clear gap between the two outlines. Two details follow from that:
+ *
+ * - The back copy drops its d-pad. Its buttons clear the front, but the d-pad
+ *   straddles the crop edge and survives as floating fragments.
+ * - `strokeWidth` and the button radii are pre-divided by the scale, so the
+ *   rendered weight still matches every other icon in this file.
+ *
+ * `single` falls back to ONE full-size controller, for the 9px IconRail
+ * activity badge: two of anything at that size is a smudge, and there the glyph
+ * only has to say "a game is running".
+ */
+export const GamepadIcon: React.FC<IconProps & { single?: boolean }> = ({
+  size = 18,
+  single = false,
+}) => {
+  const maskId = `gamepad-crop-${React.useId().replace(/:/g, '')}`;
+  const front = 'translate(0.64 6.27) scale(0.68)';
+  const back = 'translate(7.04 1.27) scale(0.68)';
+  const r = single ? 0.6 : 0.88;
+  const buttons = (
+    <>
+      <circle cx={15.5} cy={11} r={r} fill="currentColor" />
+      <circle cx={17.5} cy={13} r={r} fill="currentColor" />
+    </>
+  );
+  const dpad = <path d="M6 12h4M8 10v4" />;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={single ? 1.7 : 2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {single ? (
+        <g>
+          {dpad}
+          {buttons}
+          <path d={GAMEPAD_BODY} />
+        </g>
+      ) : (
+        <>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x={0} y={0} width={24} height={24}>
+            <rect x={0} y={0} width={24} height={24} fill="white" stroke="none" />
+            <path
+              d={GAMEPAD_BODY}
+              transform={front}
+              fill="black"
+              stroke="black"
+              strokeWidth={5}
+              strokeLinejoin="round"
+            />
+          </mask>
+          {/* The mask is in the SVG's own user space, so it hangs off an OUTER
+              group with no transform: an element's `transform` also applies to
+              the mask it references, which would drag the cutout along with the
+              back copy. */}
+          <g mask={`url(#${maskId})`}>
+            <g transform={back}>
+              {buttons}
+              <path d={GAMEPAD_BODY} />
+            </g>
+          </g>
+          <g transform={front}>
+            {dpad}
+            {buttons}
+            <path d={GAMEPAD_BODY} />
+          </g>
+        </>
+      )}
+    </svg>
+  );
+};
+
+/**
+ * UserIcon — chat header "Profile" affordance (opens CharacterPage). Stroked
+ * head + shoulders, inherits currentColor.
+ */
+export const UserIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx={12} cy={8} r={3.6} />
+    <path d="M5 20a7 7 0 0 1 14 0" />
+  </svg>
+);
+
+/**
+ * PhoneIcon — chat header "Voice call" affordance. Classic handset glyph,
+ * inherits currentColor.
+ */
+export const PhoneIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6.5 3h3l1.5 4-2 1.5a11 11 0 0 0 5 5l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4.5 5.2 2 2 0 0 1 6.5 3z" />
+  </svg>
+);
+
+/**
+ * PlayIcon — voice-preview play control (VoicePicker). Filled triangle,
+ * inherits currentColor.
+ */
+export const PlayIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M7 4.5v15l13-7.5z" />
+  </svg>
+);
+
+/**
+ * StopIcon — voice-preview stop control (VoicePicker). Filled square,
+ * inherits currentColor.
+ */
+export const StopIcon: React.FC<IconProps> = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x={6} y={6} width={12} height={12} rx={1.5} />
+  </svg>
+);
+
+/**
+ * PhoneOffIcon — voice-call "hang up" control (rotated handset + slash). Filled
+ * red via currentColor at the call site.
+ */
+export const PhoneOffIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.9}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 10.5c5-4 13-4 18 0v3l-4 .8-.6-2.4a12 12 0 0 0-8.8 0L7 14.3 3 13.5z" />
+    <path d="M2 2l20 20" />
+  </svg>
+);
+
+/** MicIcon — voice-call mute control (unmuted state). */
+export const MicIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x={9} y={3} width={6} height={11} rx={3} />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+  </svg>
+);
+
+/** MicOffIcon — voice-call mute control (muted state, with slash). */
+export const MicOffIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M9 9V6a3 3 0 0 1 6 0v5" />
+    <path d="M15 12.4A3 3 0 0 1 9 11" />
+    <path d="M5 11a7 7 0 0 0 10.3 6.2M19 11a7 7 0 0 1-.3 2" />
+    <path d="M12 18v3" />
+    <path d="M3 3l18 18" />
+  </svg>
+);
+
+/** HeadphonesIcon — voice-call deafen control (hearing state). */
+export const HeadphonesIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
+    <rect x={3} y={14} width={4} height={6} rx={1.5} />
+    <rect x={17} y={14} width={4} height={6} rx={1.5} />
+  </svg>
+);
+
+/** HeadphonesOffIcon — voice-call deafen control (deafened, with slash). */
+export const HeadphonesOffIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 14v-2a8 8 0 0 1 13.6-5.7M20 12v2" />
+    <rect x={3} y={14} width={4} height={6} rx={1.5} />
+    <path d="M17 14h4v6h-4z" />
+    <path d="M3 3l18 18" />
+  </svg>
+);
+
+/** MountainIcon — voice-call backdrop toggle (scene / character art vs the
+ * plain avatar view). Sits beside mute + deafen, so it matches their weight. */
+export const MountainIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M2.5 19h19L14 6.5l-3.6 6-2.2-3z" />
+    <circle cx={17.5} cy={7} r={1.9} />
+  </svg>
+);
+
+/** SendIcon — chat composer send button (paper-plane). */
+export const SendIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M22 2L11 13" />
+    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+  </svg>
+);
+
+/** CopyIcon — duplicate-sheets glyph for the per-message "copy text" action. */
+export const CopyIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x={9} y={9} width={12} height={12} rx={1.5} />
+    <path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6" />
+  </svg>
+);
+
+/** ReplyIcon — curved back-arrow for the per-message "quote & reply" action. */
+export const ReplyIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h11a5 5 0 0 1 5 5v6" />
+  </svg>
+);
+
+/** MinimizeIcon — a single lower bar; collapses the voice call to the corner. */
+export const MinimizeIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6 18h12" />
+  </svg>
+);
+
+/** ScreenShareIcon — a monitor with an arrow leaving it (start sharing). */
+export const ScreenShareIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 5h18v11H3z" />
+    <path d="M8 20h8" />
+    <path d="M12 9v5" />
+    <path d="M9.5 11.5 12 9l2.5 2.5" />
+  </svg>
+);
+
+/**
+ * BackseatIcon (260803): the screen-share monitor with a four-point sparkle at
+ * its top right.
+ *
+ * This is deliberately the deleted games tile's art (img/game-backseat.svg,
+ * removed with the tile in ff098b0), re-drawn at icon scale: the monitor body,
+ * stand and up-arrow are the same shapes ScreenShareIcon uses, and the star is
+ * the tile's star, filled, still overlapping the monitor's top edge the way it
+ * did there. Backseat had a recognizable mark and the mark outlived its tile;
+ * a plain share glyph in the header would not have read as the same feature.
+ *
+ * Proportions are carried over from the tile rather than re-invented, with one
+ * deliberate exception: the body is ~1.55:1 and the stand is ~0.22 of the body
+ * height, but the STAR is drawn larger than the tile's. The tile's ratio (star
+ * radius ~0.16 of the monitor width) was set for a 480px card; at 18px in a
+ * header it came out under 4px across, which is smaller than the stroke weight
+ * around it and read as a speck rather than a sparkle. It is now ~0.21, about
+ * 35% wider, and shifted up and right by half a unit so it clears the body's
+ * top-right corner. Growing it in place instead merged the two into a blob at
+ * the corner, which cost the monitor its silhouette at 18px; the point of
+ * keeping the tile's mark is that the monitor is still read first.
+ */
+export const BackseatIcon: React.FC<IconProps> = ({ size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="2" y="6" width="17" height="11" rx="1.5" />
+    <path d="M10.5 17v2.5" />
+    <path d="M7.5 19.5h6" />
+    <path d="M10.5 13.5V8" />
+    <path d="M8.5 10 10.5 8l2 2" />
+    <path
+      d="M19.2 0.8 20.2 3.3 22.7 4.3 20.2 5.3 19.2 7.8 18.2 5.3 15.7 4.3 18.2 3.3Z"
+      fill="currentColor"
+      stroke="none"
+    />
+  </svg>
+);
+
+/** ScreenShareOffIcon — the same monitor, struck through (stop sharing). */
+export const ScreenShareOffIcon: React.FC<IconProps> = ({ size = 22 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 5h18v11H3z" />
+    <path d="M8 20h8" />
+    <path d="m4 4 16 16" />
+  </svg>
+);
+
+/** FullscreenIcon — corner arrows pointing out (enter app fullscreen). */
+export const FullscreenIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+    <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  </svg>
+);
+
+/** ExitFullscreenIcon — corner arrows pointing in (leave app fullscreen). */
+export const ExitFullscreenIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+    <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+    <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+    <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+  </svg>
+);
+
+/** ChatIcon — speech bubble, the "just chat" activity tile. */
+export const ChatIcon: React.FC<IconProps> = ({ size = 30 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+  </svg>
+);
+
+/** InfoIcon — circled "i", the per-tile "about this game" affordance. */
+export const InfoIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx={12} cy={12} r={9} />
+    <path d="M12 11v5" />
+    <path d="M12 7.5h.01" />
+  </svg>
+);
+
+/** LockIcon — locked "coming soon" game tile badge. */
+export const LockIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x={5} y={11} width={14} height={9} rx={1.5} />
+    <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+  </svg>
+);
+
+/**
+ * FlipIcon — two curved arrows chasing each other in a circle. Chess HUD
+ * "flip board" control. Stroke-only, inherits currentColor.
+ */
+export const FlipIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="21.5 5.5 21.5 10.5 16.5 10.5" />
+    <polyline points="2.5 18.5 2.5 13.5 7.5 13.5" />
+    <path d="M4.2 9.5a8 8 0 0 1 13.2-3l4.1 4" />
+    <path d="M2.5 13.5l4.1 4a8 8 0 0 0 13.2-3" />
+  </svg>
+);
+
+/**
+ * DrawIcon — two horizontal bars, the chess "=" draw sign. Legible at 16px;
+ * a handshake would turn to mush at this size. Chess HUD "offer draw" control.
+ */
+export const DrawIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6 9.5h12" />
+    <path d="M6 14.5h12" />
+  </svg>
+);
+
+/**
+ * FlagIcon — waving flag on a pole. Chess HUD "resign" control. Stroke-only,
+ * inherits currentColor.
+ */
+export const FlagIcon: React.FC<IconProps> = ({ size = 16 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M5 15s1-1 3.5-1 4.5 2 7 2 3.5-1 3.5-1V4s-1 1-3.5 1S11 3 8.5 3 5 4 5 4z" />
+    <path d="M5 21v-6" />
+  </svg>
+);
+
+/**
+ * Generic pixel "block" icon — abstract grass-style cube.
+ * NOT Minecraft branding (D-34): green grass top, brown dirt body, no logo.
+ */
+export const MCBlock: React.FC<IconProps> = ({ size = 30 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges">
+    {/* dirt body */}
+    <rect x={2} y={5} width={12} height={9} fill="#8B6A3D" />
+    {/* grass top band */}
+    <rect x={2} y={3} width={12} height={3} fill="#6FA858" />
+    {/* grass speckles */}
+    <rect x={3} y={2} width={2} height={1} fill="#6FA858" />
+    <rect x={7} y={2} width={2} height={1} fill="#6FA858" />
+    <rect x={11} y={2} width={2} height={1} fill="#6FA858" />
+    <rect x={4} y={4} width={1} height={1} fill="#85C26B" />
+    <rect x={9} y={4} width={1} height={1} fill="#85C26B" />
+    {/* dirt speckles */}
+    <rect x={4} y={7} width={1} height={1} fill="#6F542F" />
+    <rect x={9} y={9} width={1} height={1} fill="#6F542F" />
+    <rect x={11} y={11} width={1} height={1} fill="#6F542F" />
+    <rect x={6} y={11} width={1} height={1} fill="#A37D4D" />
+  </svg>
+);

@@ -1,0 +1,396 @@
+/* SettingsScreen.module.css — "Party" restyle.
+ * Centered 780px column, Oswald group headers (sentence case), label|value|control
+ * rows with hairline bottom borders. Seg + Toggle primitives own their own CSS.
+ * Source: .planning/design/UI-REDESIGN-PARTY.md §4.7; mockup .set-col / .set-row.
+ */
+
+/* Scroll body — fills the surface; the column centers within it. */
+.root {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-lg) 0 var(--space-2xl);
+}
+
+.col {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 0 var(--space-lg);
+  display: flex;
+  flex-direction: column;
+}
+
+.group {
+  padding: var(--space-xs) 0 var(--space-lg);
+}
+
+.groupTitle {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-2);
+  margin: 0 0 var(--space-xs);
+}
+
+/* label | (value) | control */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Profile portrait + name field — taller for the avatar; no hairline, the
+   group is a single row so a rule under it reads as clutter (260907). */
+.profileRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+}
+
+.profileName {
+  flex: 1;
+  min-width: 0;
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--text);
+}
+
+.value {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.monoValue {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* Inline editor cluster (API key edit, name) — right-aligned, control sits last. */
+.editor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.editor > :first-child {
+  flex: 1;
+  min-width: 0;
+  max-width: 360px;
+}
+
+/* Supplementary lines under a row (export path, switch notice, danger blurb).
+   No border — they belong to the row above. */
+.helper {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--muted);
+  margin: var(--space-xs) 0 0;
+}
+
+/* Inline text link inside a .helper line (e.g. the photo credits). */
+.creditLink {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.creditLink:hover {
+  color: var(--accent);
+}
+
+.helperError {
+  color: var(--red);
+}
+
+/* Status-word colors for settings status texts (Ready / Downloading / Not set /
+   test + update results). Text color only; layout stays whatever hosts it. */
+.statusOk {
+  color: var(--green);
+}
+
+.statusWarn {
+  color: var(--warn);
+}
+
+.statusErr {
+  color: var(--red);
+}
+
+.statusInline {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.errorRow {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--red);
+  padding: var(--space-xs) 0;
+}
+
+/* 260724: theme swatches — a circle split diagonally between each theme's two
+   main colors (fill set inline per theme). Round on purpose: these are color
+   chips, not controls in the sharp-edged chrome vocabulary. Names ride the
+   shared data-tip tooltip. */
+.swatchRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  /* The two color halves (inline gradient) fill the WHOLE circle — the border
+     is transparent so nothing behind the button leaks in at the rim; a faint
+     INSET hairline keeps light swatches visible on light surfaces. Selected
+     state paints the accent ring over the gradient's outer edge instead of
+     around it, so there is never a gap between ring and fill. */
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.swatch:hover {
+  transform: scale(1.12);
+}
+
+.swatchOn {
+  border-color: var(--accent);
+}
+
+/* 260724: Theme-section range sliders (background visibility / brightness).
+   Thin hairline track + square accent thumb, sharp per D-28. */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 180px;
+  height: 2px;
+  background: var(--border-strong);
+  outline: none;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.slider:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* Icon-only copy affordance for the Account ID row. Mirrors the chat message
+   hover actions; the "Copied" flash rides the global data-tip tooltip. */
+.copyBtn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 120ms var(--ease), background 120ms var(--ease);
+}
+.copyBtn:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.copyBtn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.idValue {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.idValue .monoValue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── W5 (260817, china-compat): inline model picker list ─────────────────
+   Opens under the Model row; a bounded scroll of full-width option rows in
+   the mono register the row's value uses. Non-vision models carry a small
+   red-tinted mark on the right. */
+.modelList {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  margin-top: var(--space-xs);
+}
+
+.modelRow {
+  -webkit-appearance: none;
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.modelRow:last-child {
+  border-bottom: none;
+}
+
+.modelRow:hover {
+  background: var(--accent-soft);
+}
+
+.modelRowOn {
+  background: var(--accent-soft);
+}
+
+.modelRowOn .monoValue {
+  color: var(--accent-text);
+}
+
+.modelMark {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--red);
+  white-space: nowrap;
+}
+
+/* Games group (260908): the left column picks a game, the right shows its
+   rows. The list is a vertical version of the profile tabs (accent edge on
+   the active entry instead of an underline); the pane reuses .row, so the
+   hairline rhythm is the same as every other group. Stacks under 560px. */
+.gamesLayout {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+  gap: 0 var(--space-lg);
+  align-items: start;
+}
+
+.gamesNav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  padding: var(--space-xs) var(--space-md) var(--space-xs) 0;
+  position: sticky;
+  top: 0;
+}
+
+.gamesNavItem,
+.gamesNavItemOn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.gamesNavItem:hover {
+  color: var(--text-2);
+}
+
+.gamesNavItemOn {
+  color: var(--text);
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.gamesNavItem:focus-visible,
+.gamesNavItemOn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.gamesPane {
+  min-width: 0;
+}
+
+/* 261023: the thin rule between the games and the non-game tabs (Web search). */
+.gamesNavRule {
+  height: 1px;
+  margin: var(--space-xs) var(--space-md);
+  background: var(--border);
+}
+
+@media (max-width: 560px) {
+  .gamesLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gamesNav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 var(--space-xs);
+    position: static;
+  }
+  .gamesNavItem,
+  .gamesNavItemOn {
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+  }
+  .gamesNavItemOn {
+    border-bottom-color: var(--accent);
+  }
+  .gamesNavRule {
+    width: 1px;
+    height: auto;
+    margin: var(--space-xs) var(--space-xs);
+  }
+}

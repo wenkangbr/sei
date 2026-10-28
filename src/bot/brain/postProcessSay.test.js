@@ -1,0 +1,227 @@
+// src/bot/brain/postProcessSay.test.js
+//
+// 260616: all hardcoded content filters (telemetry/narration regex, fragment
+// words) were removed — nothing is banned by phrase or keyword. postProcessSay
+// now only NORMALIZES (whitespace collapse, lowercase) and
+// splitChatMessages only SPLITS a line into texting-style messages (count
+// capped). These tests pin that normalize/split behavior and that no message is
+// dropped for what it says.
+
+import { describe, it, expect } from 'vitest'
+import { postProcessSay, splitChatMessages, clipChars } from './orchestrator.js'
+
+describe('postProcessSay — normalize only (no content filter)', () => {
+  it('collapses whitespace', () => {
+    expect(postProcessSay('  hello   world ')).toBe('hello world')
+  })
+
+  it('keeps ALL-CAPS words as emphasis, lowercases everything else', () => {
+    expect(postProcessSay('WATCH THIS')).toBe('WATCH THIS')
+    expect(postProcessSay('Oh Good')).toBe('oh good')
+    expect(postProcessSay("i'm an AI it's fine")).toBe("i'm an AI it's fine")
+    expect(postProcessSay('diamonds. DIAMONDS.')).toBe('diamonds. DIAMONDS.')
+    expect(postProcessSay('I')).toBe('i') // single letter is not emphasis
+    expect(postProcessSay('ok we are building a BASE')).toBe('ok we are building a BASE')
+  })
+
+  it('returns empty for empty/whitespace/null input', () => {
+    expect(postProcessSay('')).toBe('')
+    expect(postProcessSay('   ')).toBe('')
+    expect(postProcessSay(null)).toBe('')
+  })
+
+  // 260725: the 256-char cap moved to the in-world send (emitChatMessages) —
+  // a long voice-call line ships whole (it is one TTS clip; the cap cut it
+  // off mid-sentence audibly).
+  it('does NOT cap length', () => {
+    expect(postProcessSay('x'.repeat(400)).length).toBe(400)
+  })
+
+  // 260707: the ONE exception to "no content filter" — a line that is nothing
+  // but a bracketed/asterisked silence placeholder is the model acting out an
+  // instruction ("silence is fine") instead of staying quiet, and it was being
+  // spoken aloud on calls. Dropped entirely; real lines still pass.
+  it('drops bracketed "(silence)"-style filler entirely', () => {
+    expect(postProcessSay('(silence)')).toBe('')
+    expect(postProcessSay('[silence]')).toBe('')
+    expect(postProcessSay('*stays silent*')).toBe('')
+    expect(postProcessSay('(staying silent)')).toBe('')
+    expect(postProcessSay('(remains quiet)')).toBe('')
+    expect(postProcessSay('(says nothing)')).toBe('')
+    expect(postProcessSay('( no reply )')).toBe('')
+  })
+
+  // 260721: a chess idle tick leaked a literal "(silence)" into chat — the
+  // pattern moved to the shared src/bot/brain/silenceFiller.js (one detector
+  // for the bot, chat voice paths, chess, watch) and gained the case /
+  // trailing-punctuation variants plus "(no comment)" (the chess move prompt
+  // says "many moves deserve no comment at all" and the model echoes it).
+  it('drops case and trailing-punctuation variants (shared silenceFiller)', () => {
+    expect(postProcessSay('(Silence)')).toBe('')
+    expect(postProcessSay('(SILENCE)')).toBe('')
+    expect(postProcessSay('(Silence).')).toBe('')
+    expect(postProcessSay('(silence)!')).toBe('')
+    expect(postProcessSay('  (silence)  ')).toBe('')
+    expect(postProcessSay('(no comment)')).toBe('')
+  })
+
+  // Real lines captured from a Sui/Marv game transcript (260707): the model
+  // embellishes the marker with a trailing clause, or shortens it to
+  // "(nothing)". These leaked past the first, stricter pattern.
+  it('drops embellished silence markers from the real transcript', () => {
+    expect(postProcessSay('(staying silent, letting it rest)')).toBe('')
+    expect(postProcessSay('(saying nothing, the thread has landed)')).toBe('')
+    expect(postProcessSay('(nothing)')).toBe('')
+    expect(postProcessSay('(silence, just watching the furnace)')).toBe('')
+  })
+
+  it('keeps in-character lines that merely mention silence', () => {
+    expect(postProcessSay('silence!')).toBe('silence!')
+    expect(postProcessSay('the silence here is creepy')).toBe('the silence here is creepy')
+    expect(postProcessSay('(sigh) fine, silence it is')).toBe('(sigh) fine, silence it is')
+    // Content after the closing bracket = a real line, not a marker.
+    expect(postProcessSay('(silence) okay fine, one more thing')).toBe(
+      '(silence) okay fine, one more thing',
+    )
+    // "nothing" with a tail is a real aside, only the bare form is a marker.
+    expect(postProcessSay('(nothing but bones down here)')).toBe('(nothing but bones down here)')
+  })
+
+  it('passes content through unchanged — nothing is banned', () => {
+    // Lines the old filter used to drop now ship (lowercased).
+    for (const line of [
+      'gather still running, 8/10',
+      'staying silent',
+      'let me look around',
+      "i've got 4 logs, need 10 total",
+      'you',
+    ]) {
+      expect(postProcessSay(line)).toBe(line.toLowerCase())
+    }
+  })
+
+  it('keeps a parenthetical aside (no longer dropped)', () => {
+    expect(postProcessSay('(took forever.)')).toBe('(took forever.)')
+  })
+
+  // Issue #4: postProcessSay used to rewrite em/en-dashes to '-', which made
+  // the dash message-break in splitChatMessages dead code in the live path
+  // (_emitSayLine runs postProcessSay FIRST). Dashes now pass through so the
+  // split can consume them; this pins the live-path composition.
+  it('leaves em/en-dashes intact so the downstream dash split can fire', () => {
+    const line = postProcessSay('gonna build a base — walls, roof, the works')
+    expect(line).toBe('gonna build a base — walls, roof, the works')
+    expect(splitChatMessages(line)).toEqual(['gonna build a base', 'walls, roof, the works'])
+    expect(splitChatMessages(postProcessSay('ok listen – you dig down')))
+      .toEqual(['ok listen', 'you dig down'])
+  })
+})
+
+// 260725: postProcessSay no longer caps, so the bound moved to the delivery
+// points — 256 code units for the Minecraft packet (emitChatMessages), a much
+// looser runaway guard for app chat / voice (which are NOT style-capped, that
+// was the point of moving it). Both clip through clipChars, which must never
+// leave half a surrogate pair behind.
+describe('clipChars — code-point-safe delivery clip', () => {
+  it('returns short input untouched', () => {
+    expect(clipChars('hello', 256)).toBe('hello')
+    expect(clipChars('', 256)).toBe('')
+    expect(clipChars(null, 256)).toBe('')
+  })
+
+  it('clips at the limit when the boundary is a plain character', () => {
+    expect(clipChars('x'.repeat(300), 256)).toBe('x'.repeat(256))
+  })
+
+  it('steps back off a split surrogate pair rather than shipping half of one', () => {
+    const line = 'x'.repeat(255) + '\u{1F600}' + 'tail'
+    const clipped = clipChars(line, 256)
+    expect(clipped).toBe('x'.repeat(255))
+    expect(clipped.length).toBeLessThanOrEqual(256)
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(clipped)).toBe(false)
+  })
+
+  it('keeps a pair that fits entirely inside the limit', () => {
+    const line = 'x'.repeat(254) + '\u{1F600}' + 'tail'
+    expect(clipChars(line, 256)).toBe('x'.repeat(254) + '\u{1F600}')
+  })
+
+  it('an all-emoji line clips to an even number of code units', () => {
+    const clipped = clipChars('\u{1F600}'.repeat(200), 15)
+    expect(clipped.length).toBe(14)
+    expect([...clipped]).toHaveLength(7)
+  })
+})
+
+describe('splitChatMessages — texting-style split (no content filter)', () => {
+  it('splits two sentences into two messages and drops trailing periods', () => {
+    expect(splitChatMessages('i have ten logs. time to build your statue.'))
+      .toEqual(['i have ten logs', 'time to build your statue'])
+  })
+
+  it('breaks on an em-dash / en-dash / spaceless em-dash', () => {
+    expect(splitChatMessages('gonna build a base — walls, roof, the works'))
+      .toEqual(['gonna build a base', 'walls, roof, the works'])
+    expect(splitChatMessages('ok listen – you dig down')).toEqual(['ok listen', 'you dig down'])
+    expect(splitChatMessages('base—walls')).toEqual(['base', 'walls'])
+  })
+
+  it('does NOT split list commas', () => {
+    expect(splitChatMessages('build walls, roof, and a door')).toEqual(['build walls, roof, and a door'])
+  })
+
+  it('keeps ? and ! (they carry tone)', () => {
+    expect(splitChatMessages('you nearby? i need wood')).toEqual(['you nearby?', 'i need wood'])
+    expect(splitChatMessages('WATCH THIS! it works')).toEqual(['WATCH THIS!', 'it works'])
+  })
+
+  it('no message cap — every segment ships', () => {
+    expect(splitChatMessages('one. two. three. four. five.'))
+      .toEqual(['one', 'two', 'three', 'four', 'five'])
+  })
+
+  it('ships every segment by content — fragments and narration are NOT dropped', () => {
+    // Old behavior dropped the lone "you" and narration shapes; now nothing is
+    // banned, so they ship.
+    expect(splitChatMessages("you. i've got 8 logs now")).toEqual(['you', "i've got 8 logs now"])
+    expect(splitChatMessages('let me look around. ugh so many trees'))
+      .toEqual(['let me look around', 'ugh so many trees'])
+  })
+
+  it('empty input yields no messages', () => {
+    expect(splitChatMessages('')).toEqual([])
+    expect(splitChatMessages(null)).toEqual([])
+  })
+
+  // 260705: per-character punctuation register (config.persona.punctuation).
+  it('casual keeps a trailing ellipsis — only a LONE period is stripped', () => {
+    expect(splitChatMessages('hm... fine')).toEqual(['hm...', 'fine'])
+    expect(splitChatMessages('great...')).toEqual(['great...'])
+    expect(splitChatMessages('done.')).toEqual(['done'])
+  })
+
+  it('deliberate keeps trailing periods but still splits into messages', () => {
+    expect(splitChatMessages('done. as ordered. as always.', 'deliberate'))
+      .toEqual(['done.', 'as ordered.', 'as always.'])
+    expect(splitChatMessages('you nearby? i need wood.', 'deliberate'))
+      .toEqual(['you nearby?', 'i need wood.'])
+    expect(splitChatMessages('hm... fine.', 'deliberate')).toEqual(['hm...', 'fine.'])
+  })
+
+  // 260730: CJK sentences end in 。！？ with no following space; without the
+  // dedicated split a whole Chinese reply shipped as ONE message.
+  it('splits Chinese sentences on 。！？ with no space after them', () => {
+    expect(splitChatMessages('我去挖矿。你要一起来吗？好！'))
+      .toEqual(['我去挖矿。', '你要一起来吗？', '好！'])
+  })
+
+  it('keeps the full-width stop (。 is not the casual trailing-period strip)', () => {
+    expect(splitChatMessages('走吧。')).toEqual(['走吧。'])
+  })
+})
+
+describe('postProcessSay citation markup (261003)', () => {
+  it('drops <cite> tags the model copied from a web search and keeps the words', () => {
+    expect(postProcessSay('<cite index="2-7,2-8">ominous vaults only</cite>, 7.5% a vault')).toBe('ominous vaults only, 7.5% a vault')
+  })
+})

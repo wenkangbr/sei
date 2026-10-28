@@ -1,0 +1,468 @@
+/** Filled by the localization sweep. See ../zh.ts for the dictionary rules. */
+export const ZH_MISC: Record<string, string> = {
+  // ── lib/errors.ts (ERROR_COPY / WARN_COPY / fallback) ──────────────────
+  "Couldn't finish joining your world in time. Press Launch to try again.":
+    '未能及时加入你的世界。请再次点击启动重试。',
+  "We can't see an open LAN world. In Minecraft, press Esc, choose Open to LAN, then click Start LAN World.":
+    '没有检测到开放的局域网世界。在 Minecraft 中按 Esc，选择「对局域网开放」，然后点击「创建局域网世界」。',
+  'Your Anthropic API key was rejected. Open Settings → re-run onboarding to paste a fresh key.':
+    '你的 Anthropic API 密钥被拒绝。请打开设置，重新运行引导流程并粘贴新的密钥。',
+  'Anthropic is throttling requests. Wait a minute and try again.':
+    'Anthropic 正在限流请求。请稍等一分钟再试。',
+  'No internet connection. Reconnect and try again.': '没有网络连接。请重新联网后再试。',
+  'Sei stopped before it could join your world. Press Launch to try again. If it keeps happening, the console at the bottom of the app has the reason.':
+    'Sei 在加入你的世界之前停止了。点击启动重试。如果反复出现，应用底部的控制台里有原因。',
+  'LAN auto-detect is blocked on this network. Try a home Wi-Fi network.':
+    '当前网络阻止了局域网自动发现。请尝试家用 Wi-Fi 网络。',
+  "Couldn't read your saved API key from the system keychain. Re-run onboarding to re-save it.":
+    '无法从系统钥匙串读取已保存的 API 密钥。请重新运行引导流程再次保存。',
+  "Your system has no secret store. Sei will save your API key but it won't be hardware-protected.":
+    '你的系统没有安全存储。Sei 会保存你的 API 密钥，但它不会受到硬件保护。',
+  "A bundled module didn't load. Reinstall Sei from the .dmg / .exe.":
+    '有一个内置模块加载失败。请通过 .dmg / .exe 重新安装 Sei。',
+  "This world's Minecraft version is not supported yet. Sei works with most Minecraft Java versions from {oldest} to {newest}. Open the Sei profile in the Minecraft Launcher (it runs {recommended}, with companion skins), open or create a world there, open it to LAN, and press Launch again. No Sei profile yet? Set it up from the Minecraft screen in Sei.":
+    '暂不支持这个世界的 Minecraft 版本。Sei 支持 {oldest} 至 {newest} 之间的大多数 Minecraft Java 版本。请在 Minecraft 启动器中打开 Sei 配置（运行 {recommended}，可显示伙伴皮肤），在其中打开或创建一个世界并对局域网开放，然后再次点击启动。还没有 Sei 配置？请在 Sei 的 Minecraft 页面中设置。',
+  "This world runs mods that every player must also have installed, so it turns Sei's normal Minecraft client away. Map mods can count too, like Xaero's Minimap. Open a world from the Sei profile in the Minecraft Launcher, open it to LAN, and press Launch again.":
+    '这个世界运行的模组要求每位玩家也安装，因此会拒绝 Sei 的普通 Minecraft 客户端。地图模组也可能如此，比如 Xaero 小地图。请在 Minecraft 启动器中用 Sei 配置打开一个世界，对局域网开放，然后再次点击启动。',
+  "This world checks Minecraft accounts (online mode), and Sei joins without one, so the world turns it away. If it is a server you run, set online-mode=false in server.properties and restart it. If a mod opened the world to LAN, turn off its online mode option, or use Minecraft's own Open to LAN instead.":
+    '这个世界会验证 Minecraft 账号（正版验证模式），而 Sei 不使用账号加入，因此被拒绝。如果这是你自己运行的服务器，请在 server.properties 中设置 online-mode=false 并重启服务器。如果是某个模组把世界开放到局域网，请关闭该模组的正版验证选项，或改用 Minecraft 自带的「对局域网开放」。',
+  "Sei can't join Forge or NeoForge worlds. Open the Sei profile in the Minecraft Launcher, open or create a world there, and open it to LAN.":
+    'Sei 无法加入 Forge 或 NeoForge 世界。请在 Minecraft 启动器中打开 Sei 配置，在其中打开或创建一个世界，并对局域网开放。',
+  "Couldn't download CustomSkinLoader. Check your connection and try the setup again.":
+    '无法下载 CustomSkinLoader。请检查网络连接后重新运行设置。',
+  "Couldn't install Fabric Loader. Make sure Minecraft is closed, then try the setup again.":
+    '无法安装 Fabric Loader。请确认 Minecraft 已关闭，然后重新运行设置。',
+  "Couldn't download the Minecraft support files (about 50 MB). Check your connection and press Summon again. A retry usually works.":
+    '无法下载 Minecraft 支持文件（约 50 MB）。请检查网络连接后再次点击召唤。通常重试一次即可。',
+  "We couldn't find any Minecraft installs. Install Minecraft, then re-run setup from Settings.":
+    '没有找到任何 Minecraft 安装。请先安装 Minecraft，再从设置中重新运行设置向导。',
+  "Couldn't look up that username on Mojang. Check the spelling and your connection.":
+    '无法在 Mojang 查询该用户名。请检查拼写和网络连接。',
+  "That doesn't look like a Minecraft skin PNG. Skins must be 64×64 pixels.":
+    '这看起来不像 Minecraft 皮肤 PNG。皮肤必须是 64×64 像素。',
+  "Sei couldn't reserve a local port for serving skins. Restart Sei and try again.":
+    'Sei 无法保留用于提供皮肤的本地端口。请重启 Sei 后再试。',
+  "Sei doesn't have permission to write to your Minecraft folder. Grant access and try again.":
+    'Sei 没有写入你的 Minecraft 文件夹的权限。请授予访问权限后再试。',
+  // Game adapters (M0, 260908): game-neutral ERROR_COPY rows.
+  "We can't see a game world to join. Open your world in the game, then press Play again.":
+    '没有检测到可加入的游戏世界。请在游戏中打开你的世界，然后再次点击「一起玩」。',
+  "We couldn't find this game on your computer. Install it, then press Play again.":
+    '在你的电脑上没有找到这个游戏。请先安装，然后再次点击「一起玩」。',
+  "Couldn't finish setting up the companion mod for this game. Make sure the game is closed, then try the setup again.":
+    '无法完成这个游戏的伙伴模组设置。请确认游戏已关闭，然后重新运行设置。',
+  "The game is open but isn't answering. Make sure the Sei mod is enabled in the game, then press Play again.":
+    '游戏已打开但没有响应。请确认游戏中已启用 Sei 模组，然后再次点击「一起玩」。',
+  "This game version isn't supported yet. Update the game to a supported version and press Play again.":
+    '暂不支持这个游戏版本。请把游戏更新到受支持的版本，然后再次点击「一起玩」。',
+  "Couldn't download the files this game needs. Check your connection and press Play again.":
+    '无法下载这个游戏所需的文件。请检查网络连接，然后再次点击「一起玩」。',
+  "You've used this week's credits. Upgrade or top up on the plan screen, or switch to your own API key in Settings.":
+    '本周的额度已用完。你可以在方案页面升级或充值，或在设置中切换为自己的 API 密钥。',
+  'Too many requests right now. Wait a little and try again.': '当前请求过多。请稍等片刻再试。',
+  "Sei can't reach Ollama. Start the Ollama app, check the Ollama address in Settings, then press Launch again.":
+    'Sei 连接不到 Ollama。请启动 Ollama 应用，并在设置中检查 Ollama 地址，然后再次点击启动。',
+  "Ollama doesn't have the model picked in Settings. Download it in Ollama (ollama pull followed by the model name) or pick another model, then press Launch again.":
+    'Ollama 里没有设置中选择的模型。请在 Ollama 中下载它（ollama pull 加上模型名），或换一个模型，然后再次点击启动。',
+  "This Ollama model can't use tools, and your companion needs them to talk and act in games. Pick a model with tool support in Settings, like qwen3 or qwen3-vl, then press Launch again.":
+    '这个 Ollama 模型不支持工具调用，而你的伙伴在游戏里说话和行动都需要它。请在设置中选择支持工具的模型，例如 qwen3 或 qwen3-vl，然后再次点击启动。',
+  "Sei doesn't know your name yet. Open Settings, type it into the Name field, then press Launch again.":
+    'Sei 还不知道你的名字。打开设置，在“名字”一栏填写，然后再次点击启动。',
+  'Detected MC {version}. Sei needs MC 1.14 or newer. Pick a newer profile or switch to a supported version such as {latest} before continuing.':
+    '检测到 MC {version}。Sei 需要 MC 1.14 或更新版本。请选择更新的配置，或切换到 {latest} 等受支持的版本后再继续。',
+  "Couldn't read mod metadata, so this mod will be skipped. If it's actually compatible, copy it into <install>/sei/mods/ manually.":
+    '无法读取模组元数据，此模组将被跳过。如果它其实兼容，请手动将其复制到 <install>/sei/mods/ 中。',
+  'Something went wrong. {detail}Try again.': '出了点问题。{detail}请重试。',
+
+  // ── lib/presence.ts ────────────────────────────────────────────────────
+  'In your world': '在你的世界里',
+  'Connecting…': '连接中…',
+  'New': '新伙伴',
+  'Online': '在线',
+  'Idle': '空闲',
+
+  // ── lib/actionVerb.ts ──────────────────────────────────────────────────
+  'following you…': '正在跟着你…',
+  'heading somewhere…': '正在赶路…',
+  'exploring…': '正在探索…',
+  'gathering {item}…': '正在收集{item}…',
+  'gathering…': '正在收集…',
+  'digging…': '正在挖掘…',
+  'building…': '正在建造…',
+  'building a shelter…': '正在搭建庇护所…',
+  'placing blocks…': '正在放置方块…',
+  'looking for {thing}…': '正在寻找{thing}…',
+  'looking around…': '正在四处张望…',
+  'gearing up…': '正在整理装备…',
+  'having a snack…': '正在吃点东西…',
+  'sleeping…': '正在睡觉…',
+  'fighting {target}…': '正在与{target}战斗…',
+  'fighting…': '正在战斗…',
+  'crafting {item}…': '正在制作{item}…',
+  'crafting…': '正在制作…',
+  'smelting…': '正在熔炼…',
+  'rummaging through chests…': '正在翻箱子…',
+  'dropping items…': '正在丢弃物品…',
+  'picking up items…': '正在捡起物品…',
+  'reading a sign…': '正在读告示牌…',
+  'fiddling with something…': '正在摆弄东西…',
+  'adventuring…': '正在冒险…',
+
+  // ── stores (chess / draw / voice / wizard) ─────────────────────────────
+  'Chess is not available in this build yet.': '当前版本还不支持国际象棋。',
+  'Draw! is not available in this build yet.': '当前版本还不支持 Draw! 游戏。',
+  'Sign in to use voice calls.': '请登录后使用语音通话。',
+  "You've used this week's credits. Upgrade or top up to keep calling.":
+    '本周额度已用完。升级或充值后才能继续通话。',
+  // 260810: voice 429 copy no longer claims a daily cap (retired 260724);
+  // it reuses the 'Too many requests right now...' key above. The paused
+  // captions below used to bypass i18n entirely.
+  '[voice paused, too many requests right now]': '[语音已暂停，当前请求过多]',
+  '[voice paused, out of credits]': '[语音已暂停，额度已用完]',
+  '[voice unavailable, this voice is not in your ElevenLabs library]':
+    '[语音不可用，这个声音不在你的 ElevenLabs 声音库中]',
+  // 261019: the user's own ElevenLabs account answered (direct key route).
+  '[voice unavailable, free ElevenLabs plans cannot use this voice]':
+    '[语音不可用，ElevenLabs 免费套餐无法使用这个声音]',
+  '[voice paused, your ElevenLabs account is out of credits]':
+    '[语音已暂停，你的 ElevenLabs 账户额度已用完]',
+  '[voice unavailable, ElevenLabs rejected your key]': '[语音不可用，ElevenLabs 拒绝了你的密钥]',
+  // 261020 (T158): a cloud line for an own ElevenLabs voice spoken with the
+  // character's stand-in Sei voice instead.
+  '[speaking with a Sei voice, add your ElevenLabs key in Settings to hear their own voice]':
+    '[正在使用 Sei 的声音，在设置中添加你的 ElevenLabs 密钥即可听到 TA 自己的声音]',
+  '[speaking with a Sei voice, ElevenLabs rejected your key]':
+    '[正在使用 Sei 的声音，ElevenLabs 拒绝了你的密钥]',
+  '[speaking with a Sei voice, their voice is no longer in your ElevenLabs account]':
+    '[正在使用 Sei 的声音，TA 的声音已不在你的 ElevenLabs 账户中]',
+  '[speaking with a Sei voice, your ElevenLabs account is out of credits]':
+    '[正在使用 Sei 的声音，你的 ElevenLabs 账户额度已用完]',
+  '[speaking with a Sei voice, your ElevenLabs plan cannot use their voice]':
+    '[正在使用 Sei 的声音，你的 ElevenLabs 套餐无法使用 TA 的声音]',
+  // 260816 local speech: the sherpa voice pack for this call is not downloaded.
+  '[voice unavailable, download the local voice pack in Settings]':
+    '[语音不可用，请在设置中下载本地语音包]',
+  // 260908: the sentinel now names WHICH pack fits the conversation language,
+  // and a line spoken with a substitute pack gets its own notice.
+  '[voice unavailable, download the Chinese voice pack in Settings]':
+    '[语音不可用，请在设置中下载中文语音包]',
+  '[voice unavailable, download the English voice pack in Settings]':
+    '[语音不可用，请在设置中下载英文语音包]',
+  '[spoken with the English voice, download the Chinese voice pack in Settings for a better fit]':
+    '[已用英文语音代读，在设置中下载中文语音包效果更好]',
+  '[spoken with the Chinese voice, download the English voice pack in Settings for a better fit]':
+    '[已用中文语音代读，在设置中下载英文语音包效果更好]',
+  // 260817 W10: sherpa-onnx itself failed to load (e.g. a build without the
+  // platform package). Without this caption the companion is silently mute.
+  '[voice unavailable, local speech cannot run on this install]':
+    '[语音不可用，本地语音无法在此安装上运行]',
+  // Backseat share errors (useBackseatStore) — these bypassed t() until 260817.
+  '{name} is in your Minecraft world right now. End that session first.':
+    '{name} 现在正在你的 Minecraft 世界里。请先结束那边的会话。',
+  'Could not start sharing. Try picking a different window.':
+    '无法开始共享。试试选择其他窗口。',
+  'Could not read that window.': '无法读取那个窗口。',
+  'Voice service is not available right now.': '语音服务暂时不可用。',
+  'This voice is not in your ElevenLabs library. Add it there, or pick a different voice.':
+    '这个声音不在你的 ElevenLabs 声音库中。请先在那里添加它，或选择其他声音。',
+  'No microphone was found. Connect one and try again.': '没有找到麦克风。请连接后重试。',
+  'Microphone access is off for Sei.': 'Sei 的麦克风权限已关闭。',
+  'Voice call failed to start. Try again in a moment.': '语音通话启动失败。请稍后再试。',
+  // 261023: call-start failures that used to fall through to the line above.
+  'Your microphone could not be opened. Close other apps that use it, or pick a different microphone in your sound settings, then try again.':
+    '无法打开你的麦克风。请关闭正在使用它的其他应用，或在声音设置中选择其他麦克风，然后重试。',
+  'Voice recognition took too long to download. Check your connection and try again.':
+    '语音识别下载时间过长。请检查网络连接后重试。',
+  'Voice recognition could not start. Check your connection and try again.':
+    '语音识别无法启动。请检查网络连接后重试。',
+
+  // ── OS permission cards (MicAccessCard / ScreenAccessGate, 260929) ────
+  'Turn on your microphone': '开启麦克风',
+  'Restart Sei to use your microphone': '重启 Sei 以使用麦克风',
+  'Sei needs your microphone so {name} can hear you.': 'Sei 需要使用麦克风，{name} 才能听到你说话。',
+  'In System Settings, open Privacy & Security > Microphone and turn on Sei.':
+    '在「系统设置」中打开「隐私与安全性 > 麦克风」，然后开启 Sei。',
+  'In Settings, turn on Microphone access and Let desktop apps access your microphone.':
+    '在「设置」中开启「麦克风访问权限」和「允许桌面应用访问你的麦克风」。',
+  'Microphone unavailable': '麦克风不可用',
+  'Your microphone is locked by Screen Time or a device policy on this Mac.':
+    '这台 Mac 的麦克风已被「屏幕使用时间」或设备管理策略锁定。',
+  'The call starts on its own once access is on.': '权限开启后，通话会自动开始。',
+  'Microphone access is on, but Sei needs a restart to use it.': '麦克风权限已开启，但 Sei 需要重启才能使用。',
+  'Restart Sei and call': '重启 Sei 并通话',
+  'Open Settings': '打开设置',
+  'Sei needs Screen Recording permission to see your screen.': 'Sei 需要「屏幕录制」权限才能看到你的屏幕。',
+  'In System Settings, open Privacy & Security > Screen Recording and turn on Sei.':
+    '在「系统设置」中打开「隐私与安全性 > 屏幕录制」，然后开启 Sei。',
+  'Your windows show up here once access is on.': '权限开启后，你的窗口会显示在这里。',
+  'I turned it on': '我已开启',
+  'macOS sometimes needs Sei to restart before it can see the screen.': 'macOS 有时需要重启 Sei 才能看到屏幕。',
+  'Restart Sei and continue': '重启 Sei 并继续',
+  'Could not read your open windows. Check screen recording permission for Sei.':
+    '无法读取你打开的窗口。请检查 Sei 的屏幕录制权限。',
+
+  // ── Call inactivity watchdog (CallInactivityPopup, 260810) ─────────────
+  'Are you still there?': '你还在吗？',
+  'This call will end in {seconds} seconds.': '通话将在 {seconds} 秒后结束。',
+  "I'm here": '我还在',
+
+  // ── HardStopModal rate-limited fallback (260810) ───────────────────────
+  // Lives here rather than modals.ts because that file is mid-edit by the
+  // localization sweep; misc.ts spreads last, so a duplicate key here wins.
+  "Sei's servers are limiting requests right now, so your companion has to sit this one out. This does not use up any of your credits. You can try again in a moment.":
+    'Sei 的服务器当前正在限流，你的伙伴只能先歇一会儿。这不会消耗你的任何额度。稍等片刻即可再试。',
+
+  'Detection failed': '检测失败',
+  'Install failed': '安装失败',
+
+  // ── App.tsx banners ────────────────────────────────────────────────────
+  'Verify your email to publish companions or buy credits. Enter the code from Sei under Settings, Account.':
+    '验证邮箱后才能发布伙伴或购买额度。请在“设置 - 账户”中输入 Sei 发来的验证码。',
+  'Your system has no keyring, so Sei is storing your sign-in less securely. Install gnome-keyring or kwallet for full protection.':
+    '你的系统没有密钥环，Sei 只能以较低的安全性保存你的登录信息。安装 gnome-keyring 或 kwallet 可获得完整保护。',
+
+  // ── Image pickers (background / portrait) ──────────────────────────────
+  'Pick an image file (PNG/JPG/WebP).': '请选择图片文件（PNG/JPG/WebP）。',
+  'Failed to set the background.': '设置背景失败。',
+  'Failed to remove the background.': '移除背景失败。',
+  'Background preview': '背景预览',
+  'None': '无',
+  'NONE': '无',
+  'Working…': '处理中…',
+  'Change': '更换',
+  'Upload': '上传',
+  'Remove': '移除',
+  'Could not decode the picked file as an image.': '无法将所选文件解码为图片。',
+  'Could not encode the image.': '无法编码这张图片。',
+  'Picture is too big (max 4096x4096).': '图片太大（最大 4096x4096）。',
+  'File too large (max 4MB after resize).': '文件太大（缩放后最大 4MB）。',
+  'File looks empty.': '文件似乎是空的。',
+  'Only PNG, JPEG, or WebP images are accepted.': '只接受 PNG、JPEG 或 WebP 图片。',
+  'Could not open that image.': '无法打开这张图片。',
+  'Could not get this image under 500KB. Try a simpler picture.':
+    '无法将这张图片压缩到 500KB 以内。请换一张更简单的图片。',
+  'Failed to apply portrait.': '应用头像失败。',
+  'Failed to remove portrait.': '移除头像失败。',
+  'Change profile picture': '更换头像',
+  'Add profile picture': '添加头像',
+  'Card image preview': '卡片图片预览',
+  'Picture is too big (max 1024×1024).': '图片太大（最大 1024×1024）。',
+  'File too large (max 500KB after resize).': '文件太大（缩放后最大 500KB）。',
+
+  // ── KnowledgeDropZone ──────────────────────────────────────────────────
+  'Upload knowledge files': '上传知识文件',
+  'Reading files…': '正在读取文件…',
+  'Drop to upload': '松开即可上传',
+  '.md, .txt, .text, .docx (max 512 KB each)': '.md、.txt、.text、.docx（每个最大 512 KB）',
+
+  // ── FeedbackRewardCard ─────────────────────────────────────────────────
+  'Daily feedback limit reached. Try again tomorrow.': '已达到今日反馈上限。请明天再试。',
+  'Sign in to submit feedback.': '请登录后提交反馈。',
+  'Feedback could not be sent. Your message is still here. Check your connection and press Submit to try again.':
+    '反馈发送失败。你的内容仍保留在这里。请检查网络连接，然后再次点击提交。',
+  "This week's credits are reset. Thank you for the feedback.":
+    '本周额度已重置。感谢你的反馈。',
+  'Feedback sent. The reward was already claimed on this account.':
+    '反馈已发送。此账户已经领取过该奖励。',
+  'What do you not like about Sei? As a thank you, your weekly usage limit will be reset immediately.':
+    '你对 Sei 有什么不满意的地方？作为感谢，你的每周使用上限将立即重置。',
+  'Tell us what to fix or improve': '告诉我们该修复或改进什么',
+  'Feedback': '反馈',
+  'Reply to my email': '回复到我的邮箱',
+  'Sending…': '发送中…',
+  'Submit and reset my credits': '提交并重置我的额度',
+
+  // ── ProviderSelect ─────────────────────────────────────────────────────
+  'Choose a model provider': '选择模型提供商',
+  'Model provider': '模型提供商',
+
+  // ── SkinEditor / SkinUploadZone / UsernameSearchField / SkinPreview3d ──
+  'Letters, digits, and underscores only, max 16 characters.':
+    '只能使用字母、数字和下划线，最多 16 个字符。',
+  'Skin setup not complete': '皮肤设置尚未完成',
+  'Your skin won’t show in Minecraft until you set up skins on this computer.':
+    '在这台电脑上完成皮肤设置之前，皮肤不会在 Minecraft 中显示。',
+  'Set up skins': '设置皮肤',
+  'Edit skin': '编辑皮肤',
+  'Skin & username': '皮肤与用户名',
+  'In-game username': '游戏内用户名',
+  'This is the name other players see above the bot. Any text works in offline LAN worlds.':
+    '这是其他玩家在伙伴头顶看到的名字。离线局域网世界中任意文本都可以。',
+  '{other} also joins as "{name}". In a world, two characters with the same in-game name share one inventory and location: connect one after the other and the second inherits the first\'s items and spot. Give one a different name to keep them separate.':
+    '{other} 也会以「{name}」的名字加入。在同一个世界里，两个游戏内同名的角色会共享同一份背包和位置：先后连接时，后进入的会继承先进入者的物品和位置。请给其中一个改个名字以便区分。',
+  'Skin source': '皮肤来源',
+  'Upload PNG': '上传 PNG',
+  'Search MC': '搜索 MC',
+  'Applying...': '应用中...',
+  'Apply skin': '应用皮肤',
+  'Skin removed': '皮肤已移除',
+  'Click again to remove': '再次点击以移除',
+  'Remove skin': '移除皮肤',
+  'Stop the bot before changing skin. Skin applies on next connect.':
+    '更换皮肤前请先停止伙伴。皮肤将在下次连接时生效。',
+  'Pick an upload or search a username first.': '请先上传皮肤或搜索一个用户名。',
+  "Skin applied. It'll show up the next time the bot connects.":
+    '皮肤已应用。伙伴下次连接时就会显示。',
+  'Drop a 64x64 PNG here, or click to browse': '将 64x64 的 PNG 拖到这里，或点击浏览',
+  'Files stay on your computer.': '文件只保存在你的电脑上。',
+  'No Minecraft account named {name}. Check the spelling.':
+    '没有名为 {name} 的 Minecraft 账户。请检查拼写。',
+  'Mojang is rate-limiting lookups. Wait a minute and try again.':
+    'Mojang 正在限制查询频率。请稍等一分钟再试。',
+  "That doesn't look like a Minecraft username. Use letters, digits, and underscores only.":
+    '这看起来不像 Minecraft 用户名。请只使用字母、数字和下划线。',
+  "Couldn't reach Mojang. Check your connection and try again.":
+    '无法连接 Mojang。请检查网络连接后重试。',
+  'MOJANG USERNAME': 'MOJANG 用户名',
+  'e.g. Notch': '例如 Notch',
+  'Mojang username': 'Mojang 用户名',
+  'Searching...': '搜索中...',
+  'Look up': '查询',
+  "Found {name}'s current skin.": '已找到 {name} 当前的皮肤。',
+  'Loading preview...': '预览加载中...',
+  '3D preview unavailable. Showing 2D thumbnail.': '3D 预览不可用。已显示 2D 缩略图。',
+  "3D preview of {name}'s skin": '{name} 的皮肤 3D 预览',
+
+  // ── VoicePicker ────────────────────────────────────────────────────────
+  'Could not load the voice list.': '无法加载声音列表。',
+  'Sample unavailable right now.': '示例暂时不可用。',
+  'Stop {name} sample': '停止 {name} 的声音示例',
+  'Play {name} sample': '播放 {name} 的声音示例',
+  'Voice': '声音',
+  'Auto: let Sei pick': '自动：让 Sei 挑选',
+  'A voice that fits their personality, never one another companion already uses. Recommended.':
+    '一个符合其个性的声音，绝不会与其他伙伴重复。推荐。',
+  'No voice': '无声音',
+  'A silent companion. They chat by text and stay quiet on voice calls.':
+    '一个安静的伙伴。只用文字聊天，语音通话时保持沉默。',
+  'Sign in to play the current voice sample. Picking a voice still works.':
+    '登录后才能播放当前声音示例。选择声音不受影响。',
+  'Current voice': '当前声音',
+  'current voice': '当前声音',
+  'Assigned from an earlier voice pool.': '来自较早的声音池。',
+  'Voice group': '声音分组',
+  'Feminine': '女性',
+  'Masculine': '男性',
+  'Neutral': '中性',
+  'Tune the voice': '调整声音',
+  'Pick a voice to tune it.': '先选择一个声音再进行调整。',
+  'Sign in to hear tuned samples.': '登录后才能试听调整后的示例。',
+  'Pitch': '音高',
+  'Reset': '重置',
+  'Higher or lower voice. Speaking pace stays the same.': '声音更高或更低。语速保持不变。',
+  'Higher or lower voice. Speaking pace stays the same. Press play to hear it.':
+    '声音更高或更低。语速保持不变。按播放试听。',
+  'Hear the pitch': '试听音高',
+  'Stop the pitch sample': '停止试听',
+  'Download a voice pack in Settings to hear a sample.': '先在设置中下载语音包，才能试听。',
+  'Local speech cannot run on this install.': '本地语音无法在此安装上运行。',
+  'Calmness': '平稳度',
+  'Higher is steadier and more even. Lower is more dramatic.':
+    '越高越平稳均匀，越低越富有戏剧性。',
+  // 261019: the user's own ElevenLabs voices in the picker.
+  'Your ElevenLabs voices': '你的 ElevenLabs 声音',
+  'Voices from your own ElevenLabs account. They play through your key.':
+    '来自你自己 ElevenLabs 账户的声音，通过你的密钥播放。',
+  'No voices in your ElevenLabs account yet. Voices you clone, design or save there show up here.':
+    '你的 ElevenLabs 账户里还没有声音。你在那里克隆、设计或收藏的声音会显示在这里。',
+  'Refresh': '刷新',
+  'Cloned voice': '克隆声音',
+  'Professional clone': '专业克隆',
+  'Designed voice': '设计的声音',
+  'Library voice': '声音库声音',
+  'Your voice': '你的声音',
+  'From your ElevenLabs account.': '来自你的 ElevenLabs 账户。',
+  'From your ElevenLabs account. It plays only with your ElevenLabs key.':
+    '来自你的 ElevenLabs 账户，只有使用你的 ElevenLabs 密钥才能播放。',
+  // 261020 (T158): cloud users with no key hear the stand-in Sei voice.
+  'From your ElevenLabs account. Without your ElevenLabs key, a Sei voice speaks for them.':
+    '来自你的 ElevenLabs 账户。没有你的 ElevenLabs 密钥时，会由一个 Sei 的声音代为说话。',
+  'Have your own ElevenLabs voices? Add your ElevenLabs key in Settings, under Voice.':
+    '有自己的 ElevenLabs 声音？请在设置的“声音”中添加你的 ElevenLabs 密钥。',
+  'Could not read your ElevenLabs voices. Check your ElevenLabs key in Settings.':
+    '无法读取你的 ElevenLabs 声音。请在设置中检查你的 ElevenLabs 密钥。',
+  'Could not load your ElevenLabs voices right now.': '暂时无法加载你的 ElevenLabs 声音。',
+  "Sei's voices play through your ElevenLabs key on paid ElevenLabs plans. On a free plan, use your own voices.":
+    'Sei 的声音在 ElevenLabs 付费套餐下可通过你的密钥播放。免费套餐请使用你自己的声音。',
+  'Free ElevenLabs plans cannot play this voice through your key. Pick one of your own voices.':
+    'ElevenLabs 免费套餐无法通过你的密钥播放这个声音。请选择你自己的声音。',
+  'Your ElevenLabs account is out of credits.': '你的 ElevenLabs 账户额度已用完。',
+  'ElevenLabs rejected your key. Check it in Settings.': 'ElevenLabs 拒绝了你的密钥。请在设置中检查。',
+
+  // ── Small components (BrowseCard, IdTag, InfoTip, chrome, buttons) ─────
+  'Open {name}': '打开 {name}',
+  'Public ID {id}': '公开 ID {id}',
+  'Public ID · #{id}': '公开 ID · #{id}',
+  'More info': '更多信息',
+  'Expand {label}': '展开{label}',
+  'Expand': '展开',
+  'Minimize': '最小化',
+  'Maximize': '最大化',
+  'Restore': '还原',
+  '{value} percent': '{value}%',
+  'Sign in with Google': '使用 Google 登录',
+  'Sign up with Google': '使用 Google 注册',
+  'Continue with Google': '通过 Google 继续',
+  'Companion': '伙伴',
+  'You': '你',
+
+  // ── 261017 (issue #46): ChatGPT plan ERROR_COPY rows ──────────────────
+  "You've reached your ChatGPT plan's usage limit. Check Manage usage in ChatGPT to see when it resets, or switch to another AI option in Settings.":
+    '你已达到 ChatGPT 套餐的用量上限。在 ChatGPT 的「管理用量」中查看何时重置，或在设置中换用其他 AI 选项。',
+  "This ChatGPT account can't use its plan in Sei. Sign in with a different account, or pick another AI option in Settings.":
+    '这个 ChatGPT 账户无法在 Sei 中使用其套餐。请换一个账户登录，或在设置中选择其他 AI 选项。',
+  "ChatGPT plan use isn't available here right now. It may be limited in your region or by your plan. Pick another AI option in Settings.":
+    '目前无法在这里使用 ChatGPT 套餐，可能受你所在地区或套餐的限制。请在设置中选择其他 AI 选项。',
+  "ChatGPT didn't accept Sei's sign-in, even after renewing it. Continue with ChatGPT in Settings to sign in again.":
+    'ChatGPT 不接受 Sei 的登录，即使已经续期也一样。请在设置中点击 Continue with ChatGPT 重新登录。',
+  "ChatGPT didn't accept the request Sei sent, so your companion stopped. Try again, or pick another AI option in Settings.":
+    'ChatGPT 不接受 Sei 发送的请求，所以你的伙伴已停下。请重试，或在设置中选择其他 AI 选项。',
+  "The ChatGPT model picked in Settings can't handle this request. Pick another model in Settings and try again.":
+    '设置中选择的 ChatGPT 模型无法处理这个请求。请在设置中换一个模型后重试。',
+  'Your ChatGPT sign-in ended. Continue with ChatGPT in Settings to sign in again.':
+    '你的 ChatGPT 登录已失效。请在设置中点击 Continue with ChatGPT 重新登录。',
+  "ChatGPT plan use isn't turned on for this sign-in. Turn it on in Settings, then try again.":
+    '这次登录没有开启 ChatGPT 套餐使用权限。请在设置中开启后重试。',
+  // 261019: own ElevenLabs voice on a shared character ("Others will hear").
+  "Your voice is from your ElevenLabs account, so others can't play it. Others will hear:":
+    '这个声音来自你的 ElevenLabs 账号，其他人无法播放。其他人会听到：',
+  'Voice others will hear': '其他人听到的声音',
+  'Closest Sei voice ({name})': '最接近的 Sei 声音（{name}）',
+  'Closest Sei voice': '最接近的 Sei 声音',
+  'Sei voice': 'Sei 声音',
+  'Voice for others: {name}': '其他人听到的声音：{name}',
+  'Voice for others: a Sei voice': '其他人听到的声音：一个 Sei 声音',
+
+  // ── 261023: Continue with ChatGPT as a Sei account sign-in ────────────
+  'ChatGPT did not confirm this email, so Sei checks it once.': 'ChatGPT 没有确认这个邮箱，所以 Sei 需要验证一次。',
+  'ChatGPT sign-in': 'ChatGPT 登录',
+  'ChatGPT sign-in hit a snag. Try again.': 'ChatGPT 登录出了点问题，请重试。',
+  'ChatGPT sign-in is having trouble right now. Try again in a moment.': 'ChatGPT 登录暂时有问题，请稍后再试。',
+  "ChatGPT sign-in isn't available in your region.": '你所在的地区无法使用 ChatGPT 登录。',
+  'ChatGPT sign-in was declined. Try again, or use another way to sign in.': 'ChatGPT 登录被拒绝。请重试，或换一种方式登录。',
+  "Couldn't reach Sei. Check your internet and try again.": '无法连接到 Sei。请检查网络后重试。',
+  'Finish in your browser': '请在浏览器中完成',
+  'Finish signing in to ChatGPT in the browser tab that opened.': '请在打开的浏览器标签页中完成 ChatGPT 登录。',
+  'First time on this computer. Enter the code to confirm it is you.': '这是你第一次在这台电脑上登录。请输入验证码确认是你本人。',
+  'Link ChatGPT': '关联 ChatGPT',
+  'Linked': '已关联',
+  'Unlink': '取消关联',
+  "Couldn't unlink right now. Try again later.": '暂时无法取消关联，请稍后再试。',
+  "Sei couldn't confirm your ChatGPT sign-in. Try again.": 'Sei 无法确认你的 ChatGPT 登录，请重试。',
+  "Sei couldn't open your browser. Try again.": 'Sei 无法打开你的浏览器，请重试。',
+  'Sign in to Sei first.': '请先登录 Sei。',
+  'That Sei account is already linked to a different ChatGPT account. Sign in with your email or Google instead.':
+    '这个 Sei 账户已经关联了另一个 ChatGPT 账户。请改用邮箱或 Google 登录。',
+  'That code expired or had too many tries. Start again.': '验证码已过期或尝试次数过多，请重新开始。',
+  "That code isn't right. Check it and try again.": '验证码不正确，请检查后重试。',
+  'The ChatGPT sign-in took too long. Try again.': 'ChatGPT 登录用时过长，请重试。',
+  'This ChatGPT account is already linked to a different Sei account.': '这个 ChatGPT 账户已经关联了另一个 Sei 账户。',
+  'This email already has a Sei account. Enter the code to sign in to it with ChatGPT.':
+    '这个邮箱已经有 Sei 账户。输入验证码，即可用 ChatGPT 登录该账户。',
+  'Too many tries. Wait a bit, or continue with Google.': '尝试次数过多，请稍等一会儿，或使用 Google 继续。',
+  'Too many tries. Wait a bit and try again.': '尝试次数过多，请稍等一会儿再试。',
+  "We opened a browser tab to finish signing in with ChatGPT. Come back when you're done; this picks up on its own.":
+    '我们打开了一个浏览器标签页来完成 ChatGPT 登录。完成后回到这里，会自动继续。',
+  "Your ChatGPT account didn't share an email address, so Sei can't make an account from it.":
+    '你的 ChatGPT 账户没有提供邮箱地址，所以 Sei 无法用它创建账户。',
+};

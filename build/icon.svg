@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="sh" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- macOS Big Sur grid: 824x824 body within 1024 canvas, 100px clearance -->
+  <rect x="100" y="100" width="824" height="824" rx="185.4" ry="185.4" fill="#7fb0ff" filter="url(#sh)"/>
+  <!-- Sei logomark (4 white bars), centered in the body -->
+  <g fill="#ffffff" transform="translate(182,182) scale(207.874)">
+    <rect x="0.5291667" y="1.0583333" width="1.0583333" height="0.52916664"/>
+    <rect x="1.5875" y="1.5875001" width="1.0583333" height="0.52916664"/>
+    <rect x="1.3229166" y="0.79375011" width="1.0583333" height="0.52916664"/>
+    <rect x="0.79375005" y="1.8520834" width="1.0583333" height="0.52916664"/>
+  </g>
+</svg>

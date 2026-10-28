@@ -1,0 +1,611 @@
+/* CharacterPage.module.css — full-bleed character detail (Party redesign §4.6;
+ * 260721 static-info revision). Portrait bleeds off the right behind a
+ * left→right scrim; a left content panel carries the crumb, name + IdTag,
+ * Description / Game tabs (description card, stat boxes, share box), and the
+ * Chat + Play deploy row. Box-to-box vertical spacing is one token
+ * (--space-md) everywhere. */
+
+.root {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background: var(--window);
+}
+
+/* ── Portrait layer (right, behind the scrim) ────────────────────────── */
+.portraitLayer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(660px, 56%);
+  z-index: 0;
+  overflow: hidden;
+}
+
+.portraitTint {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.dPic {
+  position: absolute !important;
+  inset: 0;
+  z-index: 1;
+  filter: drop-shadow(-30px 0 60px rgba(0, 0, 0, 0.5));
+  /* Portrait rises + fades in on open. */
+  animation: picRise 0.7s var(--ease) both;
+}
+
+@keyframes picRise {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(1.02);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Exit = reverse of picRise: portrait falls + fades out as the page closes. */
+.dPicLeaving {
+  animation: picFall 0.25s var(--ease) both !important;
+}
+
+@keyframes picFall {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(18px) scale(1.02);
+  }
+}
+
+.dScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  /* Softened 260729: fainter wash, shorter reach — the art carries the right
+     half of the page uncovered; the left band stays strong enough for text. */
+  background:
+    linear-gradient(
+      90deg,
+      var(--window) 3%,
+      color-mix(in srgb, var(--window) 74%, transparent) 24%,
+      color-mix(in srgb, var(--window) 22%, transparent) 46%,
+      transparent 62%
+    ),
+    linear-gradient(0deg, color-mix(in srgb, var(--window) 45%, transparent), transparent 20%);
+}
+
+/* Expand-art corner button (260729): floats over the portrait's bottom-right,
+   reusing the game surface's fullscreen glyph. Quiet, borderless chip. */
+.artExpandBtn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--window) 45%, transparent);
+  color: var(--text-2);
+  transition: color 140ms var(--ease), background 140ms var(--ease);
+}
+
+.artExpandBtn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--window) 65%, transparent);
+}
+
+/* Full-art popup body. */
+.artModalImg {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  margin: 0 auto;
+}
+
+.artSavedNote {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+/* ── Left content panel ──────────────────────────────────────────────── */
+.content {
+  position: relative;
+  z-index: 3;
+  height: 100%;
+  width: min(520px, 60%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: 18px 22px 24px 34px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Content panel slides in from the right when the page opens. Clipped by
+     .root's overflow:hidden so it never triggers a horizontal scrollbar. */
+  animation: detailIn 0.5s var(--ease) both;
+}
+
+@keyframes detailIn {
+  from {
+    transform: translateX(46px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* Exit = reverse of detailIn: the panel slides back out to the right (plus a
+   fade) as the page closes. */
+.contentLeaving {
+  animation: detailOut 0.25s var(--ease) both !important;
+}
+
+@keyframes detailOut {
+  from {
+    transform: none;
+    opacity: 1;
+  }
+  to {
+    transform: translateX(46px);
+    opacity: 0;
+  }
+}
+
+.crumb {
+  /* Pull left by the quiet/sm button's horizontal padding so the back button's
+     icon lines up with the title + content left edge. */
+  margin-left: -12px;
+  align-self: flex-start;
+}
+
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-top: 2px;
+}
+
+.title {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 38px;
+  line-height: 1.05;
+  color: var(--text);
+  margin: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.reportLink {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.reportLink:hover,
+.reportLink:focus-visible {
+  color: var(--red);
+  outline: none;
+}
+
+/* ── Tabs (mockup .pf-tab — underline on active) ─────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.tab,
+.tabActive {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.tab:hover {
+  color: var(--text-2);
+}
+
+.tabActive {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Pane (Description / Game) ───────────────────────────────────────── */
+/* One token gap between every box on the page (description card → stat
+   boxes → share box). */
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-height: 0;
+}
+
+/* Avatar tab: the pane scrolls INTERNALLY. The .content flex column shrinks
+   .pane (min-height: 0) to fit above the bottom-pinned deploy row, and the
+   Live2D settings are taller than that space — without their own scroll they
+   painted straight under the Chat/Play buttons. The padding is the breathing
+   room between the last control and the deploy row. */
+.paneScroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: var(--space-lg);
+}
+
+/* Persona / description card (mockup .persona). */
+.personaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.persona {
+  align-self: stretch;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  padding: 13px 15px;
+}
+
+.personaHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.rotateBtn {
+  appearance: none;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  padding: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.rotateBtn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rotateBtn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.personaBody {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+
+/* ── Boxed stat cells (260705: recovered dev-branch .stats layout) ────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-md);
+}
+
+.stat {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  padding: 11px 12px;
+}
+
+/* Label typography comes from the shared u-lbl utility (same as the
+   description card's header) so the pane reads as one type family. */
+.statEyebrow {
+  display: block;
+  margin-bottom: 7px;
+}
+
+/* Matches the description card body (sans 14px), just bolder for the figure. */
+.statValue {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* ── Share box (Toggle + label) — same surface as a stat cell, sits under
+   the stat boxes on the Description tab. ──────────────────────────────── */
+.shareBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  padding: 11px 12px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.shareLabel {
+  font-family: var(--sans);
+}
+
+/* 261019 — "Voice for others: <name>" under the share box (own voice only). */
+.shareVoiceRow {
+  margin-top: 8px;
+  padding: 0 2px;
+  font-family: var(--sans);
+}
+
+/* ── Deploy row (mockup .deploy) — pinned to the bottom ──────────────── */
+.deploy {
+  margin-top: auto;
+  display: flex;
+  gap: 10px;
+  padding-top: 18px;
+}
+
+.deployBig {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+}
+
+.addError {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--red);
+  margin: 0;
+}
+
+/* ── Settings (gear) popup — Reset memory + Unbind ───────────────────── */
+/* Mirrors the ProviderSelect popover surface (--surface + --border-strong +
+ * --shadow-pop); opens UPWARD since the deploy row is pinned to the bottom. */
+.settingsWrap {
+  position: relative;
+  display: flex;
+}
+
+.settingsMenu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 40;
+  min-width: 168px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.settingsItem {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: none;
+  background: none;
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-align: left;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.settingsItem:hover,
+.settingsItem:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settingsItemDanger {
+  color: var(--red);
+}
+
+.settingsItemDanger:hover,
+.settingsItemDanger:focus-visible {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+}
+
+/* ── Share-toggle confirm (rendered inside ModalShell) ───────────────── */
+.confirmTitle {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--text);
+  margin: 0;
+}
+
+.confirmBody {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+.confirmVoice {
+  margin-top: 14px;
+  font-family: var(--sans);
+}
+
+.confirmTitleOk {
+  color: var(--green);
+}
+
+.confirmTitleError {
+  color: var(--red-strong);
+}
+
+.confirmErrorBody {
+  color: var(--red-strong);
+  white-space: pre-wrap;
+}
+
+/* Indeterminate progress bar shown while chars:set-shared is in flight.
+   The work is a single round-trip (upload + moderation + publish) with no
+   sub-step telemetry, so the bar is honestly indeterminate, not a percentage. */
+.progressTrack {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.progressIndeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: var(--accent);
+  animation: shareIndeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes shareIndeterminate {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressIndeterminate {
+    left: 0;
+    width: 100%;
+    animation: sharePulse 1.4s ease-in-out infinite;
+  }
+  @keyframes sharePulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 0.8;
+    }
+  }
+}
+
+/* ── Not-found / loading stub ────────────────────────────────────────── */
+.notFound {
+  padding: 80px var(--space-2xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md-plus);
+  align-items: flex-start;
+  font-family: var(--sans);
+  font-size: 17px;
+  color: var(--text);
+}
+
+/* ── Loading wireframe (cache-miss download / first paint) ───────────────
+ * Solid grey bars in the real page's layout slots. Grey scale mirrors the
+ * scouting-card skeleton (--bg3 art, --border/--bg3 bars). Static by design
+ * (260705) — no shimmer sweep. */
+.skelPortrait {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg3);
+}
+
+.skelTitle {
+  width: 200px;
+  height: 34px;
+  margin-top: 6px;
+  background: var(--bg3);
+}
+
+.skelBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.skelLine {
+  height: 12px;
+  width: 100%;
+  background: var(--bg3);
+}
+
+.skelLineShort {
+  width: 55%;
+}
+
+.skelKv {
+  display: flex;
+  flex-direction: column;
+}
+
+.skelKvRow {
+  height: 12px;
+  width: 60%;
+  margin: 11px 0;
+  background: var(--bg3);
+}
+
+.skelDeploy {
+  margin-top: auto;
+  display: flex;
+  gap: 10px;
+  padding-top: 18px;
+}
+
+.skelBtn {
+  flex: 1;
+  height: 44px;
+  background: var(--bg3);
+}
+
+.skelBtnSm {
+  width: 52px;
+  height: 44px;
+  background: var(--bg3);
+}
+

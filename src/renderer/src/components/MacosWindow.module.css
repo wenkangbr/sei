@@ -1,0 +1,190 @@
+/* MacosWindow.module.css — terminal window chrome.
+ *
+ * Source: .planning/UI-DESIGN-SYSTEM.md §Window shell + D-32 (real macOS
+ * traffic lights — no fake ones). Full-bleed dark; the vignette/grain live
+ * in the .hud-overlays layer (global.css), mounted by MacosWindow.tsx.
+ */
+
+.window {
+  width: 100%;
+  height: 100%;
+  /* Party redesign: floor matches the BrowserWindow minimum (1000×560, set
+     in windowChrome.ts) so shrinking never clips or forces a scrollbar. */
+  min-width: 1000px;
+  min-height: 560px;
+  /* Flat near-black field — no accent bloom (the previous radial used
+     --accent-soft at 16%, ~3× the mockup's faint 5% glow, and read as a
+     blue gradient washed over the whole window). */
+  background-color: var(--window);
+  border-radius: 0; /* D-28 */
+  overflow: hidden;
+  box-shadow: var(--shadow-window);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 260724: custom app-background layer — the user's image + a black dim
+   implementing the brightness slider (backgroundImage set inline). Absolute
+   and FIRST in the DOM, so the positioned drag strip and .body stack above
+   it; covers the full window so the rail and top strip sit over it too. */
+.bgLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-size: cover;
+  background-position: center;
+}
+
+/* ── Drag strip — thin, transparent, no visible title bar ─────────────────
+ * Reserves clearance for the OS window controls (macOS traffic lights /
+ * Windows overlay) and keeps the frameless window movable. Transparent over
+ * the flat --window field, so there is no visible "bar". */
+.dragStrip {
+  position: relative;
+  /* No z-index lift needed: the HUD vignette is inset to the content panel
+     (global.css .hud-vignette) so it never reaches the chrome. The top bar and
+     the IconRail both render their flat, uniform --rail fill and read as one
+     continuous background strip. */
+  /* Sized so the macOS traffic lights get even clearance above and below.
+     NOTE: kept in sync with the .hud-vignette top inset in global.css. */
+  height: 34px;
+  flex-shrink: 0;
+  /* Top bar shares the IconRail's exact fill — flat --rail, no gradient — so the
+     two read as one continuous chrome strip. (A top-lightening gradient used to
+     live on both, but its lightening faded over each strip's own height: the
+     38px bar reached pure --rail by the seam while the ~700px rail was still
+     lightened there, so the bar read darker right at the boundary.) */
+  background-color: var(--rail);
+  display: flex;
+  align-items: center;
+  /* Label sits left, aligned with the main content's left edge (past the rail
+     so it clears the OS window controls). */
+  padding-left: calc(var(--rail-w) + var(--space-2xl));
+  -webkit-app-region: drag;
+}
+
+/* Windows / Linux frameless layout: no native traffic lights on the left, so
+   the "Sei" mark sits at the far left and our custom controls take the
+   right. (macOS keeps the rail-cleared padding above.) */
+.dragStripCustom {
+  padding-left: var(--space-lg);
+}
+
+/* Custom min / maximize / close controls (Windows/Linux). */
+.controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.ctlBtn {
+  width: 46px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--rail-fg);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.ctlBtn:hover {
+  background-color: var(--rail-hover);
+  color: var(--rail-fg-strong);
+}
+
+/* Close button signals danger on hover via the palette's red token (design
+   system §2 — reference tokens, never literal hex). */
+.ctlClose:hover {
+  background-color: var(--red);
+  color: #ffffff;
+}
+
+/* Hairline base — only across the content area (right of the rail), so there
+   is no visible seam where the bar meets the IconRail. */
+.dragStrip::after {
+  content: '';
+  position: absolute;
+  left: var(--rail-w);
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  /* Seam now drawn by the content panel's rounded border (App.tsx main); a
+     straight hairline here would re-form the old square corner. */
+  display: none;
+}
+
+/* When the IconRail is hidden (onboarding / auth / skin-setup), there's no rail
+   to read as continuous chrome on the left, so the hairline spans the FULL
+   width — including the segment under the macOS traffic lights. With the rail
+   visible the default inset above keeps that segment clear (no seam). */
+.dragStrip.fullDivider::after {
+  left: 0;
+}
+
+/* ...and with no rail below it, the bar's flat --rail fill (which only reads as
+   chrome BECAUSE it continues into the rail) becomes a stray colored strip over
+   the --window sign-in field. Paint it --window so the rail-less screens read as
+   one uniform color. Keep the left padding: the "Sei" mark still needs the inset
+   to clear the macOS traffic lights. (260625) */
+.dragStrip.fullDivider {
+  background-color: var(--window);
+}
+
+/* 260724: with a custom background active, the chrome goes translucent so the
+   image shows through the top strip too — same tint strength as the rail and
+   the content panel (--app-bg-tint = inverse of the opacity slider). */
+:root[data-app-bg] .dragStrip {
+  background-color: color-mix(in srgb, var(--rail) var(--app-bg-tint, 100%), transparent);
+}
+
+:root[data-app-bg] .dragStrip.fullDivider {
+  background-color: color-mix(in srgb, var(--window) var(--app-bg-tint, 100%), transparent);
+}
+
+
+/* "Sei" mark — small Rajdhani (--sans) label. */
+.titleLabel {
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--rail-fg);
+  text-transform: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Version tag — same label, one tone dimmer than the title. */
+.versionTag {
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--rail-fg);
+  opacity: 0.7;
+  margin-left: var(--space-xs);
+  user-select: none;
+  pointer-events: none;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* Legacy hooks kept so older references don't break. */
+.titleCenter,
+.dot,
+.subtitle {
+  display: none;
+}

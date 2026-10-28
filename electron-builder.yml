@@ -1,0 +1,545 @@
+# electron-builder.yml — Phase 4 final.
+# Source: .planning/phases/04-electron-gui-packaging/04-RESEARCH.md §"Code Examples §3 + §4"
+#         + §"Resolved During Plan-Phase" Q1, Q2, Q3.
+#
+# appId is LOCKED for v1. Any future change strands every existing user's
+# safeStorage Keychain entry on macOS and Windows DPAPI scope on Windows —
+# treat as irrevocable. See Phase 8 Plan 01 HOTSPOTS row 12 + threat T-08-01.
+
+# Locked 2026-05-17 (Phase 8 Plan 01 Task 2 — resolves Phase 4 04-10 BLOCKING).
+appId: com.sei.app
+productName: Sei
+copyright: Copyright (c) 2026 Sei
+
+# In-app auto-update (quick/260604-uoy — reverses D-63, see note at EOF).
+# electron-updater pulls the latest release + the generated metadata files
+# (latest-mac.yml / latest.yml / latest-linux.yml) from the GitHub Releases of
+# this owner/repo. Adding `publish` is also what makes electron-builder emit the
+# `app-update.yml` baked into the packaged app — without it `autoUpdater` has no
+# feed to check. owner/repo MUST match the real GitHub repository that hosts the
+# releases (USER-ACTION: verify the generated app-update.yml owner before the
+# first release; a mismatch silently checks the wrong repo).
+publish:
+  provider: github
+  owner: wenkangbr
+  repo: sei
+
+directories:
+  output: release
+  buildResources: build
+
+# Inclusive: pack the whole repo, then carve out planning docs, dev-only
+# tooling, build outputs, personal/user state, and gitignored items.
+#
+# 260803 — READ THIS BEFORE ADDING AN EXCLUSION HERE. electron-builder builds
+# TWO filters and this top-level list only reaches ONE of them:
+#
+#   * the NODE MODULE matcher (getNodeModuleFileMatcher in
+#     app-builder-lib/out/fileMatcher.js) takes the "!" patterns from BOTH this
+#     list and the platform-specific `files:` blocks. Every node_modules
+#     exclusion below therefore works, which is why the bedrock / gl / three /
+#     onnxruntime prunes are measurably effective.
+#   * the MAIN APP matcher (getMainFileMatchers, the one that decides which
+#     PROJECT files land in app.asar) ends up with ONLY the platform-specific
+#     block plus electron-builder's own defaults. Everything here is silently
+#     dropped from it. Confirmed by reading `release/builder-debug.yml`
+#     (`arm64.firstOrDefaultFilePatterns` against `arm64.nodeModuleFilePatterns`)
+#     and by inspecting the SHIPPED v0.6.0-beta.3 app.asar, which contains
+#     .planning/, docs/, scripts/, CLAUDE.md and README.md despite all five
+#     being excluded here since the first release.
+#
+# So a `!vendor/**` or `!docs/**` written here alone does nothing to the app
+# tree. Project-tree exclusions are duplicated into the mac and win `files:`
+# blocks below, under the "app-tree exclusions" heading, and THAT is the copy
+# that actually removes them. Keep the two in sync; if a third platform target
+# is ever revived, it needs the same block.
+files:
+  - "**/*"
+  # build outputs that get regenerated
+  - "!release/**"
+  - "!output/**"
+  - "!out/**"
+  # planning + docs (project history, not shipped)
+  - "!.planning/**"
+  - "!docs/**"
+  # demo/ holds the marketing capture tooling; `frames/` and `out/` are local
+  # recording output (612MB on the machine this was measured on) and only the
+  # scripts and fixtures are committed. It must appear in BOTH lists: with the
+  # exclusion in the platform block alone it was still packed in full, which is
+  # the cleanest evidence that these two matchers are genuinely separate.
+  - "!demo/**"
+  - "!ARCHITECTURE.md"
+  - "!RELEASE-NOTES.md"
+  - "!README.md"
+  - "!CLAUDE.md"
+  # tooling / CI / git
+  - "!.github/**"
+  - "!.git/**"
+  - "!.gitignore"
+  - "!.claude/**"
+  - "!test/**"
+  - "!scripts/**"
+  - "!tsconfig*.json"
+  - "!electron.vite.config.ts"
+  - "!electron-builder.yml"
+  # local logs / personal state
+  - "!logs/**"
+  - "!memory/**"
+  - "!config.json"
+  - "!config.example.json"
+  - "!.env*"
+  # sibling working copies / forks
+  - "!mineflayer/**"
+  # 260908 GAME PACKS. packs/<game>/package.json is an npm WORKSPACE that owns
+  # a game adapter's heavy runtime deps (Minecraft: mineflayer, minecraft-data,
+  # prismarine-viewer, gl, node-canvas-webgl, ...). The root package.json does
+  # NOT depend on the workspace, and electron-builder's npm collector
+  # (app-builder-lib/out/node-module-collector/npmNodeModulesCollector.js)
+  # only follows `_dependencies` of the root, so nothing reachable ONLY through
+  # the workspace is packed: those packages ship as a downloadable pack built by
+  # scripts/build-game-pack.mjs and fetched on first use by
+  # src/main/games/packs.ts. The texture / gl-residue / bedrock prunes that used
+  # to live in this file moved with them to packs/minecraft/prune.mjs, which the
+  # pack builder applies. The workspace directory itself must stay out of the
+  # app tree too (both matchers, see above).
+  - "!packs/**"
+  # 260803 vendor: stop shipping vendor/ TWICE. Every vendored package is a
+  # `file:` dependency, so electron-builder already copies its dereferenced tree
+  # to node_modules/<name>, which asarUnpack then unpacks. The literal vendor/
+  # directory is ALSO swept up by the leading `**/*` glob and packed inside
+  # app.asar as a second, real-bytes copy that asarUnpack does not cover.
+  # Measured against the shipped /Applications/Sei.app v0.6.0-beta.3: app.asar
+  # was 388.8MB, of which 303.3MB / 383 files was the redundant vendor/ tree,
+  # sitting alongside a fully separate app.asar.unpacked/node_modules/cce-1.
+  # This exclusion is safe precisely because exclusion globs are matched against
+  # the DESTINATION path and never the source realpath (see
+  # app-builder-lib/out/util/filter.js + NodeModuleCopyHelper.js), so it cannot
+  # reach the copied node_modules/<name> trees. No runtime code references a
+  # vendor/ path either; every consumer uses a bare specifier
+  # (`await import('cce-1')` in src/main/chess/chessService.ts,
+  # `await import('img2skin/src/pipeline.js')` and `await import('soulcaster')`
+  # in src/main/uniqueGeneration.ts, `import ... from 'soulcaster'` in
+  # src/main/voice/voiceAssign.ts). vendor/ stays committed to the repo so
+  # `npm ci` still resolves the file: deps; this only stops packaging the copy.
+  # Expect app.asar to drop from ~389MB to ~85MB, which also hands headroom back
+  # to the dmg file-count sizing constraint described in the mac section below.
+  - "!vendor/**"
+  # source maps + node_modules trim
+  - "!**/*.map"
+  - "!**/node_modules/*/{test,tests,__tests__,*.md,*.markdown,LICENSE*,license*}"
+  # 260908: the minecraft-data bedrock prune and the headless-gl build-residue
+  # prune that lived here since 260803 moved to packs/minecraft/prune.mjs (with
+  # their rationale); those packages are no longer in the app tree at all.
+  # 260803 three: drop the build variants no code path can reach. Root three
+  # (0.185.1) has an exports map, so the app resolves to build/three.module.js
+  # (+ three.core.js) and build/three.cjs; the ./webgpu and ./tsl subpaths have
+  # zero importers, which makes the webgpu/tsl bundles and every *.min.js dead
+  # weight. (The nested 0.128.0 under prismarine-viewer ships in the Minecraft
+  # game pack since 260908; its prune is in packs/minecraft/prune.mjs.) The
+  # nested 0.156.1 under skinview3d DOES have an exports
+  # field, which shadows `main` and does not export ./build/*, so three.js,
+  # three.min.js and three.module.min.js there are unreachable (only three.cjs
+  # and three.module.js are used). The renderer's copies are Vite-bundled into
+  # dist/renderer (electron.vite.config.ts applies externalizeDepsPlugin to main
+  # and preload only), so nothing loads three from node_modules at runtime.
+  - "!node_modules/three/build/*.min.js"
+  - "!node_modules/three/build/three.webgpu.js"
+  - "!node_modules/three/build/three.webgpu.nodes.js"
+  - "!node_modules/three/build/three.tsl.js"
+  - "!node_modules/skinview3d/node_modules/three/build/three.js"
+  - "!node_modules/skinview3d/node_modules/three/build/three.min.js"
+  - "!node_modules/skinview3d/node_modules/three/build/three.module.min.js"
+  # 260710 chess: onnxruntime-node ships prebuilds for EVERY platform (~208MB
+  # total). Each per-OS section below excludes the two foreign OS trees
+  # (static globs — no ${os} macro in `files`, so per-OS overrides carry it).
+  # The maia ONNX model itself is NOT bundled (46MB, downloaded on first chess
+  # launch — see src/main/chess/modelStore.ts).
+
+# Stable filenames so https://github.com/sei-studio/sei/releases/latest/download/<name>
+# resolves correctly from sei.gg regardless of version bump.
+artifactName: Sei-${os}-${arch}.${ext}
+
+asar: true
+
+# 260925 Electron fuses (flipped in the packaged Electron binary right before
+# signing, by app-builder-lib's doAddElectronFuses via @electron/fuses). Until
+# this block existed every shipped build ran with Electron's default fuse wire
+# (read off the installed v0.6.5-beta.2: 101100011), so any local process could
+# relaunch the signed Sei with `--inspect`, ELECTRON_RUN_AS_NODE=1 or
+# NODE_OPTIONS=--require=... and run arbitrary code AS Sei, inheriting its TCC
+# grants (Screen Recording, Automation, folder access) and its keychain /
+# safeStorage key. Fuses are compiled into the binary, so none of this touches
+# `npm run dev` or the `ELECTRON_RUN_AS_NODE=1 npx electron ...` smoke tests:
+# those run the unpackaged node_modules/electron binary, which is never flipped.
+#
+# Nothing in the packaged app relies on the three Node escape hatches: no code
+# path spawns process.execPath with ELECTRON_RUN_AS_NODE, the bot is forked
+# with utilityProcess.fork (not child_process.fork of the Electron binary) and
+# passes no execArgv, and nothing reads NODE_OPTIONS. The one casualty is the
+# out-of-app fallback in scripts/heal-phantom-call.{mjs,command}, which used the
+# installed Sei as a Node runtime; it now asks for Node instead (the in-app
+# recovery in src/main/recovery covers users without Node).
+#
+# Chromium's --remote-debugging-port / -pipe are not governed by any fuse, so
+# src/main/remoteDebugGuard.ts (first import of the main entry) makes packaged
+# STABLE builds exit at startup when they see them (or --inspect*, --js-flags).
+# Packaged betas and dev still allow them, so the remote test tooling that
+# relaunches the installed app with --remote-debugging-port must use a beta.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  # Encrypts the Chromium cookie store with the same OS key safeStorage already
+  # uses (macOS "Sei Safe Storage" keychain item, Windows DPAPI), so it adds no
+  # new keychain prompt. One-way: existing plaintext cookies stay readable and
+  # are re-encrypted on write, but turning this back OFF later corrupts the
+  # store. Sei itself keeps no auth in cookies (the Supabase session lives in
+  # safeStorage via src/main/auth/sessionStore.ts).
+  enableCookieEncryption: true
+  # Load the app ONLY from resources/app.asar (default search order also tries
+  # resources/app/ and default_app.asar, which lets someone drop a folder next
+  # to the asar and have it loaded). Compatible with our asarUnpack layout: the
+  # unpacked tree is reached through the asar's own unpacked-file redirection
+  # and via the explicit app.asar.unpacked path botSupervisor.botEntryPath()
+  # hands utilityProcess.fork; neither is an app-entry lookup.
+  onlyLoadAppFromAsar: true
+  # Left OFF on purpose. Integrity validation only covers app.asar (dist/ main,
+  # preload, renderer); src/bot/** and every node_modules package live in
+  # app.asar.unpacked, which it never checks, so the protection is thin. The
+  # failure mode is a hard crash at launch on mac/win if the hash embedded at
+  # pack time (Info.plist ElectronAsarIntegrity / win resource) ever disagrees
+  # with the asar that signing and notarization leave behind, and that can only
+  # be verified on a real signed mac/win build, not on the Linux build host.
+  enableEmbeddedAsarIntegrityValidation: false
+
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+
+asarUnpack:
+  - "src/bot/**/*"
+  # node_modules must be unpacked so the bot (running from app.asar.unpacked
+  # via utilityProcess.fork) can resolve its deps (zod, mineflayer, etc.) —
+  # Node ESM resolution from an unpacked file cannot cross back into the asar.
+  - "node_modules/**/*"
+  # 260707: the bundled default skins under resources/skins were removed — the
+  # three former defaults (sui/lyra/marv) are ordinary cloud characters now, so
+  # there is no offline skin baseline to unpack.
+
+mac:
+  category: public.app-category.games
+  # Separate arm64 + x64 builds (not universal): the universal merge step in
+  # @electron/asar bails with "pattern is too long" when asarUnpack covers
+  # node_modules/**/*.
+  #
+  # DMG RE-ENABLED (260728): the dmg was dropped 2026-06-21 because the bundled
+  # prismarine-viewer texture tree was ~32k tiny files — dmgbuild auto-sizes the
+  # DMG volume from the byte-sum of the .app (+~10%), which badly understates
+  # the APFS per-file block/inode overhead at that file count, so `ditto`
+  # overflowed the mounted volume with "No space left on device". The fix is the
+  # texture prune below (mac `files`): mac builds keep only the 1.20.1 / 1.21.1
+  # / 1.21.4 texture sets (~9.4k files, the versions players actually run),
+  # which brings the count under the sizing slack. (260803: the win `files` list
+  # now applies the same prune, for install time rather than volume sizing, so
+  # the tradeoff below is no longer mac-only.)
+  #
+  # The tradeoff: on a world older than 1.20, POV vision is unavailable
+  # (povRenderer reports CANT_SEE) and dashboard item icons fall back to text
+  # labels (mcAssets 404s). CANT_SEE is enforced by an explicit atlas-existence
+  # pre-check in povRenderer.js, and that pre-check is what makes the
+  # degradation graceful rather than fatal: prismarine-viewer's supported-version
+  # list is hardcoded in viewer/lib/version.js, so setVersion() still SUCCEEDS
+  # for, say, a 1.16 world and it is the later loadTexture() that rejects. That
+  # rejection has no .catch, so without the pre-check it escapes to the
+  # unhandledRejection handler in src/bot/index.js, which calls process.exit(1)
+  # and kills the whole bot process. Do not remove the pre-check while these
+  # texture exclusions are in place.
+  #
+  # The zip stays: it is the macOS auto-update payload (latest-mac.yml +
+  # app-update.yml reference it). The dmg is the manual download — drag to
+  # /Applications IS the install, which is why the in-app "Move to
+  # Applications?" prompt was retired (src/main/relocate.ts).
+  # USER-ACTION: the sizing failure was empirical — verify the first
+  # `npm run dist:mac` actually produces both dmgs before pointing the website
+  # at them, and update sei-website's download links from .zip to .dmg.
+  #
+  # Dual-arch (2026-06-22): arm64 + x64 build in a SINGLE mac job/invocation, so
+  # one latest-mac.yml covers both (no cross-runner feed merge). x64 native deps
+  # (gl/canvas) cross-compile for x86_64 on the arm64 runner. signIgnore keeps the
+  # per-arch signing fast, so building both no longer balloons the job.
+  target:
+    - target: zip
+      arch: [arm64, x64]
+    - target: dmg
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  identity: "Shang Wang (7485LZ74DA)"   # electron-builder prepends "Developer ID Application:" itself
+  notarize: true   # team id comes from APPLE_TEAM_ID env var (.env.local locally; GH Actions secret in CI)
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # (Until 260908 a signIgnore for prismarine-viewer/public/textures/ lived
+  # here: ~32k data files that made electron-osx-sign's per-file codesign
+  # stall. The texture tree now ships in the downloadable Minecraft game pack,
+  # which is never code-signed as part of the app, so the entry is gone. If a
+  # future pack asset lands back inside the app bundle, bring it back.)
+  # macOS 15+/26 Local Network privacy: NSLocalNetworkUsageDescription (in
+  # extendInfo below) is the text macOS would show in an "allow Sei to find
+  # devices on your local network" prompt. Since the loopback LAN watcher
+  # (260624, src/main/lanWatcher.ts) Sei no longer listens for Minecraft's
+  # multicast beacon: it finds an open-to-LAN world by scanning the listening
+  # ports on 127.0.0.1 and pinging them, and the companion joins over
+  # 127.0.0.1 too. Loopback is not gated by Local Network privacy, so this
+  # prompt is not expected to appear for Minecraft. The key stays as a
+  # harmless fallback string in case anything else ever touches the LAN; the
+  # multicast entitlement is NOT in the plist (it blocks launch without a
+  # provisioning profile).
+  # 260710 chess: drop the linux + windows onnxruntime prebuilds from mac builds
+  # (~76MB saved; both mac arches stay because arm64+x64 build in one job).
+  # 260728 dmg: the prismarine-viewer texture prune that made the dmg
+  # buildable again now lives in packs/minecraft/prune.mjs (260908); the
+  # texture tree left the app bundle altogether with the Minecraft game pack.
+  # 260803 chess: cce-1 bundles its OWN nested onnxruntime-node (259MB on disk,
+  # a different ABI generation from the top-level @huggingface/transformers
+  # copy: napi-v6, not napi-v3; darwin 75MB / linux 57MB / win32 128MB), so the
+  # per-OS globs above never matched it and every
+  # platform build shipped all three prebuild trees. The destination path is
+  # node_modules/cce-1/... and NOT vendor/cce-1/... because electron-builder
+  # copies the dereferenced `file:` dependency tree there, and exclusion globs
+  # match the destination path. Dropping linux + win32 saves ~184MB on mac;
+  # darwin/ only has an arm64 prebuild, so the x64 mac build has no chess
+  # inference either way and this changes nothing for it.
+  files:
+    # ── app-tree exclusions ───────────────────────────────────────────────
+    # Duplicated verbatim in the win block. These are copies of top-level
+    # `files:` entries that never reach the main app matcher (see the long
+    # note above that list); this is the copy that actually keeps them out of
+    # app.asar. Measured on mac arm64: vendor/ 30.6MB, .planning/ 10.2MB,
+    # docs/ 7.9MB, demo/ 2.4MB, scripts/ 0.4MB. `!.env*` is the one that
+    # matters beyond size: a LOCAL `dist:mac` was packing the developer's own
+    # .env into app.asar. CI never had one, so no shipped build carried it,
+    # but nothing was stopping the next hand-built artifact from doing so.
+    # src/ stays: the bot ships as raw ESM source and is forked from there.
+    - "!vendor/**"
+    - "!output/**"
+    - "!packs/**"
+    - "!.planning/**"
+    - "!docs/**"
+    - "!demo/**"
+    - "!scripts/**"
+    - "!test/**"
+    - "!.claude/**"
+    - "!.github/**"
+    - "!logs/**"
+    - "!memory/**"
+    - "!ARCHITECTURE.md"
+    - "!RELEASE-NOTES.md"
+    - "!README.md"
+    - "!CLAUDE.md"
+    - "!tsconfig*.json"
+    - "!electron.vite.config.ts"
+    - "!config.json"
+    - "!config.example.json"
+    - "!.env*"
+    - "!node_modules/onnxruntime-node/bin/napi-v3/{linux,win32}/**"
+    - "!node_modules/cce-1/node_modules/onnxruntime-node/bin/napi-v6/{linux,win32}/**"
+    # 260816 local speech: sherpa-onnx ships per-PLATFORM prebuild packages
+    # (sherpa-onnx-darwin-arm64 etc., pulled as optionalDependencies of
+    # sherpa-onnx-node), so unlike onnxruntime-node's single all-platform
+    # package, npm only installs the matching one and these excludes are
+    # mostly belt-and-braces: they drop any foreign-platform package that a
+    # cache or a cross-arch install left behind. NOTE for the mac x64 build:
+    # npm on an arm64 runner skips sherpa-onnx-darwin-x64 (cpu-gated), so the
+    # x64 mac artifact ships without local speech unless CI force-installs it
+    # (same situation as cce-1's arm64-only darwin prebuild).
+    - "!node_modules/sherpa-onnx-linux-*/**"
+    - "!node_modules/sherpa-onnx-win-*/**"
+    # 260908: the prismarine-viewer texture prune (and the 1.16.4 entity-texture
+    # exception, 260806) moved to packs/minecraft/prune.mjs with the Minecraft
+    # game pack. prismarine-viewer is not in the app tree any more.
+  # 260728 backseat: the bundled ScreenCaptureKit system-audio tap
+  # (native/mac-audio-tap, built by scripts/build-mac-audio-tap.sh into a
+  # UNIVERSAL binary — one file serves both arch builds). Chromium loopback
+  # audio is Windows-only, so this helper is how macOS backseat hears the game.
+  # It lands at Contents/Resources/audio-tap/sei-audio-tap; electron-osx-sign
+  # picks Mach-O executables in Resources up for hardened signing, and the
+  # notarization pass covers it (USER-ACTION: on the first mac dist, verify
+  # with `codesign -dv --verbose Sei.app/Contents/Resources/audio-tap/sei-audio-tap`).
+  #
+  # (A second helper, native/mac-ocr, shipped here between 260803 and 260804 to
+  # read the text on the shared screen. It worked and was still removed: the
+  # window title answers the question that was actually hurting, for no
+  # per-frame cost. See the note in src/shared/backseatIpc.ts.)
+  #
+  # 260925 backseat act (M0 spike, dev flag SEI_BACKSEAT_ACT): the input
+  # executor helper (native/mac-input, scripts/build-mac-input.sh, universal).
+  # Posts CGEvents, queries windows/displays, takes per-step screenshots. It
+  # needs NO new entitlement: CGEvent posting is gated by the Accessibility TCC
+  # grant, not by an entitlement, and screenshots ride the Screen Recording
+  # grant backseat already asks for. Which process macOS attributes the child's
+  # events to (Sei.app vs the helper) is the open question the Mac step answers.
+  # It builds on every mac release, flag or not, but a compile failure is NOT
+  # fatal: build-mac-input.sh leaves resources/mac-input absent (with a CI
+  # ::warning), electron-builder skips a missing `from` dir with a warning, and
+  # the app then reports control unavailable (actSession.controlAvailability).
+  # CI's mac-input-helper job builds it strict, so a break shows up on the PR.
+  extraResources:
+    - from: resources/audio-tap
+      to: audio-tap
+    - from: resources/mac-input
+      to: mac-input
+  extendInfo:
+    NSLocalNetworkUsageDescription: "Sei finds your Minecraft world when you open it to LAN so your characters can join it on this Mac."
+    # Voice calls (260707): the TCC prompt string macOS shows the first time Sei
+    # captures the mic. WITHOUT it (and the com.apple.security.device.audio-input
+    # entitlement in build/entitlements.mac.plist) getUserMedia silently fails in
+    # the packaged/notarized build even after the user allows the mic.
+    NSMicrophoneUsageDescription: "Sei uses your microphone so you can talk to your characters on a voice call."
+    # DST helper (260925): when the Open panel route is cancelled, Sei asks
+    # Finder (via /usr/bin/osascript) to copy the helper into the game bundle,
+    # and macOS shows "Sei wants access to control Finder" once. This string is
+    # the explanation line on that prompt. No entitlement goes with it: the
+    # Apple Event is sent by osascript, not by Sei's hardened-runtime binary
+    # (measured working on a signed build with no automation entitlement), and
+    # com.apple.security.automation.apple-events is only needed when the app's
+    # own process sends events.
+    NSAppleEventsUsageDescription: "Sei asks Finder to copy its helper into Don't Starve Together when macOS will not let Sei write there itself."
+
+# dmg layout: app on the left, /Applications link on the right — the classic
+# drag-to-install window (re-enabled 260728 with the texture prune above).
+dmg:
+  sign: false               # default since electron-builder 20.43.0
+  contents:
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+    - x: 130
+      y: 220
+      type: file
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # 260710 chess: drop mac + linux onnxruntime prebuilds (and win arm64) from
+  # the x64-only windows build (~170MB saved).
+  # 260803 chess: same treatment for cce-1's nested onnxruntime-node copy, which
+  # the globs above never reached (it lives one level deeper and is a different
+  # ABI generation, napi-v6 rather than napi-v3), so every windows build was
+  # shipping the darwin and linux prebuilds too. The destination path is
+  # node_modules/cce-1/... and NOT vendor/cce-1/... because electron-builder
+  # copies the dereferenced `file:` dependency tree there, and exclusion globs
+  # match the destination path. Dropping darwin + linux saves ~130MB; the
+  # win32/arm64 line mirrors the arm64 exclusion above (this target is
+  # `arch: [x64]` only) for a further ~64MB.
+  # 260803 install time: the prismarine-viewer texture prune was the single
+  # biggest win on windows (32,465 texture files down to 9,391, about 134
+  # seconds of NSIS per-file install overhead). Since 260908 the whole texture
+  # tree ships in the downloadable Minecraft game pack instead (prune list in
+  # packs/minecraft/prune.mjs), so the installer carries none of it.
+  files:
+    # ── app-tree exclusions ───────────────────────────────────────────────
+    # Kept identical to the mac block; see the comment there for why the
+    # top-level `files:` copy of these does nothing on its own.
+    - "!vendor/**"
+    - "!output/**"
+    - "!packs/**"
+    - "!.planning/**"
+    - "!docs/**"
+    - "!demo/**"
+    - "!scripts/**"
+    - "!test/**"
+    - "!.claude/**"
+    - "!.github/**"
+    - "!logs/**"
+    - "!memory/**"
+    - "!ARCHITECTURE.md"
+    - "!RELEASE-NOTES.md"
+    - "!README.md"
+    - "!CLAUDE.md"
+    - "!tsconfig*.json"
+    - "!electron.vite.config.ts"
+    - "!config.json"
+    - "!config.example.json"
+    - "!.env*"
+    - "!node_modules/onnxruntime-node/bin/napi-v3/{darwin,linux}/**"
+    - "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**"
+    - "!node_modules/cce-1/node_modules/onnxruntime-node/bin/napi-v6/{darwin,linux}/**"
+    - "!node_modules/cce-1/node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+    # 260816 local speech: drop foreign-platform sherpa-onnx prebuild packages
+    # (win-ia32 is never a target; see the mac block's note on this pattern).
+    - "!node_modules/sherpa-onnx-darwin-*/**"
+    - "!node_modules/sherpa-onnx-linux-*/**"
+    - "!node_modules/sherpa-onnx-win-ia32/**"
+    # 260908: the prismarine-viewer texture prune (and the 1.16.4 entity-texture
+    # exception, 260806) moved to packs/minecraft/prune.mjs with the Minecraft
+    # game pack. prismarine-viewer is not in the app tree any more.
+  # Windows ships UNSIGNED for now (RESEARCH §Resolved Q2). SmartScreen's
+  # "unknown publisher" warning is the accepted UX.
+  #
+  # publisherName: null is LOAD-BEARING, not decoration. Leaving it unset does
+  # NOT mean "no publisher" — electron-builder falls back to the common name of
+  # whatever signing certificate it can resolve from the environment
+  # (windowsSignToolManager.computedPublisherName → certInfo.commonName) and
+  # writes that into the app-update.yml baked into the app. In 260803 the mac
+  # CSC_LINK secret was in scope on the Windows CI leg, so v0.4.x-v0.5.2 shipped
+  # declaring an APPLE Developer ID as the Windows publisher. A non-null
+  # publisherName makes every client run Get-AuthenticodeSignature and reject
+  # anything that is not Status=Valid; Windows has no trust path to Apple's
+  # root, so all of them deleted their fully-downloaded installer and hung the
+  # update UI at 100%. Explicit null makes the client skip verification, which
+  # is the only correct setting for an unsigned build.
+  #
+  # When real Windows signing lands: set publisherName to the FULL DN of the new
+  # certificate (a full DN is compared key-by-key; a bare CN only warns), and set
+  # the WIN_PUBLISHER_NAME repo variable to the same string so the release
+  # workflow's "Verify Windows update signature contract" step enforces it.
+  signtoolOptions:
+    publisherName: null
+
+# 260929 one-click installer (outside-app-steps R2b). The assisted installer
+# was Welcome, install mode, Choose folder, Install, Finish: 3 to 4 clicks
+# before the app ever ran, on the platform that is 93% of installs. One-click
+# is a progress bar that launches Sei when done (runAfterFinish defaults on).
+#
+# Upgrade safety for installs made by the ASSISTED installer (v0.6.4 and
+# earlier), verified on windows-latest (.github/workflows/nsis-upgrade-check.yml):
+#   - The uninstall key is Software\Microsoft\Windows\CurrentVersion\Uninstall\
+#     <APP_GUID>, and APP_GUID is a UUIDv5 of appId (LOCKED), not of the
+#     installer mode, so the one-click installer finds and replaces the old
+#     entry: one Apps & features row, never two.
+#   - A per-user install in a folder the user picked keeps that folder:
+#     multiUser.nsh reuses HKCU Software\<APP_GUID> InstallLocation. Only a
+#     FRESH install gets the default %LOCALAPPDATA%\Programs\sei.
+#   - userData is %APPDATA%\Sei in every mode and the old uninstaller runs with
+#     /KEEP_APP_DATA --updated, so settings, characters and the session stay.
+#   - The one case the stock one-click installer misses is a PER-MACHINE
+#     install ("Anyone who uses this computer" on the old install-mode page,
+#     HKLM + Program Files). build/installer.nsh (customInstall) removes that
+#     copy after the per-user install lands, with one admin prompt.
+# allowToChangeInstallationDirectory is gone: electron-builder rejects it with
+# oneClick (it only exists for the assisted installer).
+#
+# The one-click window is a small progress banner (SpiderBanner) with no
+# sidebar or header bitmaps, so the stock blue assisted-installer art is gone
+# with the switch. Its only artwork is the header icon, set to the Sei mark
+# (build/installerHeaderIcon.ico, the app icon packed at 16-256 px). A fresh
+# install lands in %LOCALAPPDATA%\Programs\sei (lowercase: one-click per-user
+# uses the package name, not productName; Windows paths are case-insensitive
+# and existing installs keep their folder).
+nsis:
+  oneClick: true
+  perMachine: false                        # per-user install, no admin prompt
+  include: build/installer.nsh
+  installerHeaderIcon: build/installerHeaderIcon.ico
+
+# Linux (AppImage) dropped 2026-06-20: the prismarine-viewer headless-gl native
+# dep won't build on the Linux runner and the target was untested anyway. Re-add a
+# `linux:` block + the ubuntu matrix leg in release.yml if/when it's supported.
+
+# D-63 REVERSED (quick/260604-uoy, 2026-06-04): auto-update is now IN scope.
+# The notify-and-redirect-to-website updater (updateChecker.ts + UpdateToast.tsx)
+# was replaced by a real in-app electron-updater that downloads + installs in
+# place over the GitHub Releases channel (see `publish:` above). userData is
+# never touched by an update. See .planning/quick/260604-uoy-* for the design.

@@ -1,0 +1,30 @@
+/* ApiKeySetupModal — content styles only; scrim, panel, title, footer and
+   animation come from ModalShell (stacked tier set via the `tier` prop). */
+.body {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+/* Key field: a mono micro-label sitting directly above the input. */
+.keyField {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fieldLabel {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.error {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--red);
+  margin: 0;
+}

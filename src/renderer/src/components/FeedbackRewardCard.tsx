@@ -1,0 +1,145 @@
+/**
+ * FeedbackRewardCard — one-time feedback-for-a-reset banner (260706, reworked
+ * 260724).
+ *
+ * Shown at the top of the plan screen once the account has spent part of its
+ * weekly allowance and has not yet claimed the feedback reward. Submitting
+ * sends the text to the proxy's POST /feedback with claimReward=true; the
+ * server resets this week's usage back to zero, at most once per account (the
+ * client flag is only a mirror).
+ *
+ * "Reply to my email" attaches the signed-in account email so the operator
+ * can respond; unticked submissions stay anonymous on the feedback row (the
+ * ledger grant itself always records the account, since credits need an owner).
+ */
+
+import React, { useState } from 'react';
+import { sei } from '../lib/ipcClient';
+import { clearFeedbackDraft, getFeedbackDraft, setFeedbackDraft } from '../lib/feedbackDraft';
+import { t as tBare, useT } from '../lib/i18n';
+import { useAuthStore } from '../lib/stores/useAuthStore';
+import { useCreditsStore } from '../lib/stores/useCreditsStore';
+import { Button } from './Button';
+import { TextField } from './TextField';
+import styles from './FeedbackRewardCard.module.css';
+
+function submitErrorCopy(code: string): string {
+  switch (code) {
+    case 'PROXY_RATE_LIMITED':
+      return tBare('Daily feedback limit reached. Try again tomorrow.');
+    case 'PROXY_NO_SESSION':
+      return tBare('Sign in to submit feedback.');
+    default:
+      return tBare('Feedback could not be sent. Your message is still here. Check your connection and press Submit to try again.');
+  }
+}
+
+const DRAFT_KEY = 'reward-card';
+
+export interface FeedbackRewardCardProps {
+  /**
+   * Fired once the banner is finished for good: the usage reset was applied,
+   * or the server says this account already claimed it. The parent flips to the
+   * standing "Submit feedback" button. The claimed flag is persisted to
+   * config here, before the callback.
+   */
+  onDone: () => void;
+}
+
+export function FeedbackRewardCard({ onDone }: FeedbackRewardCardProps): React.ReactElement {
+  const authEmail = useAuthStore((s) =>
+    s.state.kind === 'signed_in' ? s.state.user.email : null,
+  );
+  const refreshCredits = useCreditsStore((s) => s.refresh);
+  const t = useT();
+  // 260926: the draft survives the card unmounting (leaving the plan screen
+  // after a failed send), cleared only on success.
+  const [body, setBodyState] = useState(() => getFeedbackDraft(DRAFT_KEY));
+  const setBody = (v: string): void => {
+    setBodyState(v);
+    setFeedbackDraft(DRAFT_KEY, v);
+  };
+  const [replyToEmail, setReplyToEmail] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [doneNote, setDoneNote] = useState<string | null>(null);
+
+  const canSubmit = body.trim().length > 0 && !submitting;
+
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await sei.feedbackSubmit({
+        body: body.trim(),
+        ...(replyToEmail && authEmail ? { email: authEmail } : {}),
+        claimReward: true,
+      });
+      if (!res.ok) {
+        setError(submitErrorCopy(res.code));
+        return;
+      }
+      clearFeedbackDraft(DRAFT_KEY);
+      // Persist the claimed mirror so the banner never re-appears on this
+      // profile, then let the parent swap in the standing feedback button.
+      const cfg = await sei.getConfig();
+      await sei.saveConfig({ ...cfg, feedback_reward_claimed: true });
+      if (res.usage_reset) {
+        void refreshCredits();
+        setDoneNote(t("This week's credits are reset. Thank you for the feedback."));
+      } else {
+        setDoneNote(t('Feedback sent. The reward was already claimed on this account.'));
+      }
+      window.setTimeout(onDone, 4000);
+    } catch {
+      setError(submitErrorCopy('PROXY_NETWORK'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (doneNote) {
+    return (
+      <div className={styles.card} role="status">
+        <p className={styles.doneNote}>{doneNote}</p>
+      </div>
+    );
+  }
+
+  return (
+    <form className={styles.card} onSubmit={handleSubmit}>
+      <p className={styles.lede}>
+        {t('What do you not like about Sei? As a thank you, your weekly usage limit will be reset immediately.')}
+      </p>
+      <TextField
+        value={body}
+        onChange={setBody}
+        multiline
+        rows={3}
+        placeholder={t('Tell us what to fix or improve')}
+        aria-label={t('Feedback')}
+      />
+      <div className={styles.row}>
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={replyToEmail}
+            onChange={(e) => setReplyToEmail(e.target.checked)}
+            disabled={!authEmail}
+          />
+          {t('Reply to my email')}
+        </label>
+        <Button kind="accent" size="md" type="submit" disabled={!canSubmit}>
+          {submitting ? t('Sending…') : t('Submit and reset my credits')}
+        </Button>
+      </div>
+      {error ? (
+        <p className={styles.errorText} role="alert">
+          {error}
+        </p>
+      ) : null}
+    </form>
+  );
+}

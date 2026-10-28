@@ -1,0 +1,33 @@
+/* DeleteAccountModal (D-12) — content styles only; scrim, panel, title, footer
+   and animation come from ModalShell. Type-to-confirm input row + inline error
+   + success line. */
+.body {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+
+.bodyEmphasis {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.confirmInputRow {
+  margin: 0;
+}
+
+.errorText {
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--red);
+  margin: 0;
+}
+
+.success {
+  font-family: var(--sans);
+  font-size: 15px;
+  color: var(--text);
+  margin: 0;
+}

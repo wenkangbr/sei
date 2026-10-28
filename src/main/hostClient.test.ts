@@ -1,0 +1,354 @@
+/**
+ * Tests for the LAN host-client detection stack (260709):
+ *   - classifyCmdline: java command-line → client kind markers, including the
+ *     two deliberate traps (CurseForge paths must NOT read as Forge; Lunar
+ *     bundles Fabric internals so Lunar must win over the fabric marker).
+ *   - forgeModCountFromStatus: Forge 1.13+ `forgeData` and 1.12- `modinfo`
+ *     ping metadata extraction.
+ *   - lanHostWarning: the shared disclaimer decision the renderer gate uses.
+ *   - parseLsof / parseNetstat: pid extraction feeding the classifier.
+ */
+import { describe, it, expect } from 'vitest';
+import { classifyCmdline, hasForgeLaunchTarget } from './hostClient';
+import { forgeModCountFromStatus } from './mcPing';
+import { parseLsof, parseNetstat, parseTasklist } from './listeningPorts';
+import {
+  lanHostWarning,
+  isForgeFamilyLanHost,
+  forgeHostBlock,
+  forgeHostBlockedMessage,
+  type LanHost,
+} from '../shared/ipc';
+
+const host = (client: LanHost['client'], forgeModCount: number | null = null): LanHost => ({
+  client,
+  forgeModCount,
+});
+
+describe('classifyCmdline', () => {
+  it('detects vanilla by main class', () => {
+    expect(
+      classifyCmdline('/usr/bin/java -Xmx2G -cp ... net.minecraft.client.main.Main --version 1.21.1'),
+    ).toBe('vanilla');
+  });
+
+  it('detects Fabric by loader main class', () => {
+    expect(
+      classifyCmdline('java -cp fabric-loader-0.16.9.jar net.fabricmc.loader.impl.launch.knot.KnotClient'),
+    ).toBe('fabric');
+  });
+
+  it('detects Forge by bootstraplauncher', () => {
+    expect(
+      classifyCmdline('java -p ... cpw.mods.bootstraplauncher.BootstrapLauncher --fml.forgeVersion 47.3.0'),
+    ).toBe('forge');
+  });
+
+  it('detects NeoForge', () => {
+    expect(classifyCmdline('java ... --fml.neoForgeVersion 21.1.77 net.neoforged.fancymodloader ...')).toBe(
+      'neoforge',
+    );
+  });
+
+  it('detects Lunar Client by install path', () => {
+    expect(
+      classifyCmdline('/Users/x/.lunarclient/jre/bin/java -cp genesis.jar com.moonsworth.launch ...'),
+    ).toBe('lunar');
+  });
+
+  it('prefers Lunar over its bundled Fabric internals', () => {
+    expect(classifyCmdline('java -cp /home/x/.lunarclient/offline/net.fabricmc.loader.jar ...')).toBe('lunar');
+  });
+
+  it('does NOT read a vanilla CurseForge instance as Forge', () => {
+    expect(
+      classifyCmdline(
+        'java -Djava.library.path=/Users/x/curseforge/minecraft/Instances/MyPack/natives net.minecraft.client.main.Main',
+      ),
+    ).toBe('vanilla');
+  });
+
+  it('returns unknown for empty or unrecognized command lines', () => {
+    expect(classifyCmdline('')).toBe('unknown');
+    expect(classifyCmdline('   ')).toBe('unknown');
+    expect(classifyCmdline('node server.js')).toBe('unknown');
+  });
+
+  it('detects Quilt, and prefers it over its bundled Fabric internals', () => {
+    expect(
+      classifyCmdline('java -cp quilt-loader-0.26.0.jar org.quiltmc.loader.impl.launch.knot.KnotClient'),
+    ).toBe('quilt');
+    expect(
+      classifyCmdline('java -cp quilt-loader.jar:net.fabricmc.fabric-api.jar org.quiltmc.loader...'),
+    ).toBe('quilt');
+  });
+});
+
+describe('forgeModCountFromStatus', () => {
+  it('reads forgeData.mods (1.13+)', () => {
+    expect(forgeModCountFromStatus({ forgeData: { mods: [{ modId: 'a' }, { modId: 'b' }] } })).toBe(2);
+  });
+
+  it('reads modinfo.modList (1.12-)', () => {
+    expect(forgeModCountFromStatus({ modinfo: { type: 'FML', modList: [{ modid: 'forge' }] } })).toBe(1);
+  });
+
+  it('returns 0 when forge metadata is present but unparseable', () => {
+    expect(forgeModCountFromStatus({ forgeData: { fmlNetworkVersion: 3 } })).toBe(0);
+  });
+
+  it('returns null for vanilla pings', () => {
+    expect(forgeModCountFromStatus({ version: { name: '1.21.1', protocol: 767 } })).toBe(null);
+    expect(forgeModCountFromStatus(null)).toBe(null);
+  });
+});
+
+describe('lanHostWarning (three-way classification, 260721)', () => {
+  const fabric = (seiSkinMod: boolean, otherModCount: number | null): LanHost => ({
+    client: 'fabric',
+    forgeModCount: null,
+    seiSkinMod,
+    otherModCount,
+  });
+
+  it('blocks Forge and NeoForge hosts on strong evidence (260929), Quilt keeps the soft modded warning', () => {
+    // Ping forgeData / modinfo.
+    expect(lanHostWarning(host('forge', 0))).toBe('forge');
+    expect(lanHostWarning(host('neoforge', 12))).toBe('forge');
+    // Explicit launch target on the command line.
+    expect(lanHostWarning({ client: 'forge', forgeModCount: null, forgeLaunchTarget: true })).toBe('forge');
+    expect(lanHostWarning({ client: 'neoforge', forgeModCount: null, forgeLaunchTarget: true })).toBe('forge');
+    expect(lanHostWarning(host('quilt'))).toBe('modded');
+  });
+
+  it('falls back to the soft modded warning when the Forge evidence is weak', () => {
+    // Classified Forge/NeoForge from a cmdline substring only: no ping
+    // metadata, no launch target. Could be an instance name, so no hard stop.
+    expect(lanHostWarning(host('forge'))).toBe('modded');
+    expect(lanHostWarning(host('neoforge'))).toBe('modded');
+    expect(lanHostWarning({ client: 'neoforge', forgeModCount: null, forgeLaunchTarget: false })).toBe('modded');
+  });
+
+  it('case 1: a vanilla host gets the vanilla (default skin) disclaimer', () => {
+    expect(lanHostWarning(host('vanilla'))).toBe('vanilla');
+  });
+
+  it('case 2: Fabric with only Sei\'s skin mod is silent (our own setup)', () => {
+    expect(lanHostWarning(fabric(true, 0))).toBe(null);
+  });
+
+  it('case 3: Fabric with mods besides Sei\'s skin mod warns as modded', () => {
+    expect(lanHostWarning(fabric(true, 3))).toBe('modded');
+    expect(lanHostWarning(fabric(false, 1))).toBe('modded');
+  });
+
+  it('Fabric with no other-mod evidence stays silent (benefit of the doubt)', () => {
+    // Mods dir unresolvable/unreadable → null evidence.
+    expect(lanHostWarning(fabric(false, null))).toBe(null);
+    // Fabric with a readable but empty/absent mods dir → zero mods.
+    expect(lanHostWarning(fabric(false, 0))).toBe(null);
+    // Pre-260721 cached states without the new fields.
+    expect(lanHostWarning(host('fabric'))).toBe(null);
+  });
+
+  it('maps Lunar to the lunar disclaimer', () => {
+    expect(lanHostWarning(host('lunar'))).toBe('lunar');
+  });
+
+  it('blocks as Forge when only the ping carried forge metadata', () => {
+    expect(lanHostWarning(host('unknown', 4))).toBe('forge');
+    expect(lanHostWarning(host('unknown', 0))).toBe('forge');
+  });
+
+  it('blocks as Forge when only the launch target matched', () => {
+    expect(lanHostWarning({ client: 'unknown', forgeModCount: null, forgeLaunchTarget: true })).toBe('forge');
+  });
+
+  it('stays silent for unknown and missing hosts', () => {
+    expect(lanHostWarning(host('unknown'))).toBe(null);
+    expect(lanHostWarning(undefined)).toBe(null);
+  });
+});
+
+// Command lines shaped like what each launcher really passes (trimmed).
+const CMD = {
+  vanilla:
+    '/usr/bin/java -Xmx2G -Djava.library.path=/x/natives -cp /x/client.jar net.minecraft.client.main.Main ' +
+    '--username Steve --version 1.21.1 --gameDir /Users/x/Library/Application Support/minecraft --assetsDir /x/assets',
+  seiFabric:
+    '/usr/bin/java -Xmx2G -DFabricMcEmu= net.minecraft.client.main.Main -cp /x/libraries/net/fabricmc/fabric-loader/0.16.9/fabric-loader-0.16.9.jar ' +
+    'net.fabricmc.loader.impl.launch.knot.KnotClient --username Steve --version fabric-loader-0.16.9-1.21.1 ' +
+    '--gameDir /Users/x/Library/Application Support/minecraft/sei/1.21.1',
+  forge120:
+    'java -Xmx4G -p /x/bootstraplauncher-1.1.2.jar cpw.mods.bootstraplauncher.BootstrapLauncher --username Steve ' +
+    '--version 1.20.1-forge-47.3.0 --launchTarget forgeclient --fml.forgeVersion 47.3.0 --fml.mcVersion 1.20.1 ' +
+    '--fml.forgeGroup net.minecraftforge --fml.mcpVersion 20230612.114412',
+  forge112:
+    'javaw -Xmx4G -cp /x/launchwrapper-1.12.jar net.minecraft.launchwrapper.Launch --username Steve ' +
+    '--version 1.12.2-forge-14.23.5.2860 --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker --versionType Forge',
+  forge116:
+    'java -cp /x/modlauncher-8.1.3.jar cpw.mods.modlauncher.Launcher --username Steve --launchTarget fmlclient ' +
+    '--fml.forgeVersion 36.2.39 --fml.mcVersion 1.16.5',
+  neoforge121:
+    '"C:\\Program Files\\Java\\bin\\javaw.exe" -Xmx4G cpw.mods.bootstraplauncher.BootstrapLauncher "--launchTarget" "forgeclient" ' +
+    '"--fml.neoForgeVersion" "21.1.77" "--fml.fmlVersion" "4.0.24" "--fml.mcVersion" "1.21.1"',
+  // A Fabric instance that happens to be NAMED after NeoForge: the substring
+  // marker reads it as NeoForge, which is exactly the misread to guard.
+  fabricNamedNeoforge:
+    'java -cp /x/fabric-loader-0.16.9.jar net.fabricmc.loader.impl.launch.knot.KnotClient ' +
+    '--gameDir /home/x/.local/share/PrismLauncher/instances/neoforge-port-test/.minecraft',
+};
+
+/** Mirrors lanWatcher.hostFor: cmdline → cached host fields + the ping. */
+function hostFromCmdline(cmdline: string, forgeModCount: number | null = null, mods?: Partial<LanHost>): LanHost {
+  return {
+    client: classifyCmdline(cmdline),
+    forgeModCount,
+    forgeLaunchTarget: hasForgeLaunchTarget(cmdline),
+    ...mods,
+  };
+}
+
+describe('hasForgeLaunchTarget (260929, strong cmdline evidence)', () => {
+  it('matches the launch targets Forge and NeoForge launchers pass', () => {
+    expect(hasForgeLaunchTarget(CMD.forge120)).toBe(true);
+    expect(hasForgeLaunchTarget(CMD.forge112)).toBe(true);
+    expect(hasForgeLaunchTarget(CMD.forge116)).toBe(true);
+    expect(hasForgeLaunchTarget(CMD.neoforge121)).toBe(true);
+    expect(hasForgeLaunchTarget('java cpw.mods.bootstraplauncher.BootstrapLauncher --launchTarget forge_client')).toBe(true);
+    expect(hasForgeLaunchTarget('java cpw.mods.bootstraplauncher.BootstrapLauncher --launchTarget neoforgeclient')).toBe(true);
+    expect(hasForgeLaunchTarget('java -cp x net.neoforged.fml.startup.Client --username Steve')).toBe(true);
+  });
+
+  it('does not match vanilla, Fabric, or a loader named only in a path', () => {
+    expect(hasForgeLaunchTarget(CMD.vanilla)).toBe(false);
+    expect(hasForgeLaunchTarget(CMD.seiFabric)).toBe(false);
+    expect(hasForgeLaunchTarget(CMD.fabricNamedNeoforge)).toBe(false);
+    expect(hasForgeLaunchTarget('java -Dx=/Users/x/curseforge/minecraft/Instances/Pack net.minecraft.client.main.Main')).toBe(false);
+    expect(hasForgeLaunchTarget('java -cp /libs/net/minecraftforge/forge.jar net.minecraft.client.main.Main')).toBe(false);
+    expect(hasForgeLaunchTarget('')).toBe(false);
+  });
+});
+
+describe('forgeHostBlock (260929, the one hard-stop check)', () => {
+  it("never blocks vanilla or Sei's own Fabric profile", () => {
+    expect(forgeHostBlock(hostFromCmdline(CMD.vanilla))).toBeNull();
+    expect(forgeHostBlock(hostFromCmdline(CMD.seiFabric, null, { seiSkinMod: true, otherModCount: 0 }))).toBeNull();
+    expect(lanHostWarning(hostFromCmdline(CMD.seiFabric, null, { seiSkinMod: true, otherModCount: 0 }))).toBeNull();
+  });
+
+  it('never blocks Fabric, even with other mods (soft warning only)', () => {
+    const modded = hostFromCmdline(CMD.seiFabric, null, { seiSkinMod: true, otherModCount: 5 });
+    expect(forgeHostBlock(modded)).toBeNull();
+    expect(lanHostWarning(modded)).toBe('modded');
+  });
+
+  it('blocks real Forge and NeoForge hosts, from the cmdline alone or the ping alone', () => {
+    expect(forgeHostBlock(hostFromCmdline(CMD.forge120))).toEqual({ loader: 'Forge' });
+    expect(forgeHostBlock(hostFromCmdline(CMD.forge112))).toEqual({ loader: 'Forge' });
+    expect(forgeHostBlock(hostFromCmdline(CMD.forge116))).toEqual({ loader: 'Forge' });
+    expect(forgeHostBlock(hostFromCmdline(CMD.neoforge121))).toEqual({ loader: 'NeoForge' });
+    // Cmdline unreadable (e.g. ps failed) but the ping carried forgeData.
+    expect(forgeHostBlock(hostFromCmdline('', 3))).toEqual({ loader: 'Forge' });
+  });
+
+  it('does not hard-block on a weak marker; that host gets the soft warning with Summon anyway', () => {
+    const misread = hostFromCmdline(CMD.fabricNamedNeoforge);
+    expect(misread.client).toBe('neoforge');
+    expect(forgeHostBlock(misread)).toBeNull();
+    expect(lanHostWarning(misread)).toBe('modded');
+  });
+
+  it('never blocks an unknown or missing host', () => {
+    expect(forgeHostBlock(hostFromCmdline(''))).toBeNull();
+    expect(forgeHostBlock(undefined)).toBeNull();
+  });
+
+  it('has a plain message naming the loader and the fix', () => {
+    const m = forgeHostBlockedMessage('NeoForge');
+    expect(m).toContain("Sei can't join NeoForge worlds");
+    expect(m).toContain('Sei profile');
+    expect(m).not.toMatch(/\u2014|\u2013/);
+  });
+});
+
+describe('isForgeFamilyLanHost (260929, timeout reclassification)', () => {
+  it('is true for Forge and NeoForge on any evidence, and unknown hosts with Forge ping data', () => {
+    expect(isForgeFamilyLanHost(host('forge'))).toBe(true);
+    expect(isForgeFamilyLanHost(host('neoforge'))).toBe(true);
+    expect(isForgeFamilyLanHost({ client: 'forge', forgeModCount: null })).toBe(true);
+    expect(isForgeFamilyLanHost(host('unknown', 2))).toBe(true);
+  });
+
+  it('is false for Fabric (with or without foreign mods), Quilt, vanilla, Lunar and unknown hosts', () => {
+    expect(isForgeFamilyLanHost({ client: 'fabric', forgeModCount: null, seiSkinMod: true, otherModCount: 3 })).toBe(false);
+    expect(isForgeFamilyLanHost({ client: 'fabric', forgeModCount: null, seiSkinMod: true, otherModCount: 0 })).toBe(false);
+    expect(isForgeFamilyLanHost(host('quilt'))).toBe(false);
+    expect(isForgeFamilyLanHost(host('vanilla'))).toBe(false);
+    expect(isForgeFamilyLanHost(host('lunar'))).toBe(false);
+    expect(isForgeFamilyLanHost(host('unknown'))).toBe(false);
+    expect(isForgeFamilyLanHost(undefined)).toBe(false);
+  });
+});
+
+describe('listeningPorts pid extraction', () => {
+  it('parseLsof reads the PID column', () => {
+    const out = [
+      'COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME',
+      'java    41234 ouen   99u  IPv6 0x1234567890      0t0  TCP *:52345 (LISTEN)',
+    ].join('\n');
+    expect(parseLsof(out)).toEqual([{ port: 52345, command: 'java', pid: 41234 }]);
+  });
+
+  it('parseNetstat reads the trailing PID', () => {
+    const out = ['  TCP    0.0.0.0:52345    0.0.0.0:0    LISTENING    9876'].join('\n');
+    expect(parseNetstat(out)).toEqual([{ port: 52345, command: '', pid: 9876 }]);
+  });
+
+  // Issue #5: modern Java binds "Open to LAN" as a dual-stack socket that
+  // netstat reports only in the IPv6 table, and localized Windows translates
+  // the state word — so the parser must read `[::]` rows and must not depend
+  // on the literal LISTENING string.
+  it('parseNetstat reads dual-stack (IPv6) listener rows', () => {
+    const out = ['  TCP    [::]:52345    [::]:0    LISTENING    9876'].join('\n');
+    expect(parseNetstat(out)).toEqual([{ port: 52345, command: '', pid: 9876 }]);
+  });
+
+  it('parseNetstat is locale-proof: listening state detected by foreign port 0', () => {
+    const out = [
+      '',
+      'Aktive Verbindungen',
+      '',
+      '  Proto  Lokale Adresse         Remoteadresse          Status           PID',
+      '  TCP    0.0.0.0:135            0.0.0.0:0              ABHÖREN          1044',
+      '  TCP    [::]:52345             [::]:0                 ABHÖREN          9876',
+      '  TCP    192.168.1.5:52001      52.1.2.3:443           HERGESTELLT      4321',
+      '  UDP    0.0.0.0:5353           *:*                                     2222',
+    ].join('\n');
+    expect(parseNetstat(out)).toEqual([
+      { port: 135, command: '', pid: 1044 },
+      { port: 52345, command: '', pid: 9876 },
+    ]);
+  });
+
+  it('parseNetstat dedupes a port listed on both stacks', () => {
+    const out = [
+      '  TCP    0.0.0.0:52345    0.0.0.0:0    LISTENING    9876',
+      '  TCP    [::]:52345       [::]:0       LISTENING    9876',
+    ].join('\n');
+    expect(parseNetstat(out)).toEqual([{ port: 52345, command: '', pid: 9876 }]);
+  });
+
+  it('parseTasklist maps pid to image name from csv rows', () => {
+    const out = [
+      '"System Idle Process","0","Services","0","8 K"',
+      '"javaw.exe","41234","Console","1","1,204,556 K"',
+      '"svchost.exe","1044","Services","0","12,332 K"',
+      'INFO: not a csv row',
+    ].join('\n');
+    const names = parseTasklist(out);
+    expect(names.get(41234)).toBe('javaw.exe');
+    expect(names.get(1044)).toBe('svchost.exe');
+    expect(names.has(0)).toBe(false);
+  });
+});

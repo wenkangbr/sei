@@ -1,0 +1,278 @@
+/**
+ * configStore.addPlaytimeMs — profile-wide cumulative playtime accumulator.
+ *
+ * 260615: the UsageBar tooltip's "played Xh Ym" reads `total_playtime_ms` off
+ * UserConfig. It's incremented at session-end (botSupervisor) so the total
+ * survives a character being deleted. These tests pin the atomic
+ * read-modify-write: accumulation, non-positive no-ops, and field preservation.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile, stat, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { _setUserDataOverride, paths, setActiveScope, profileRootFor } from './paths';
+import {
+  addPlaytimeMs,
+  backfillTotalPlaytimeOnce,
+  loadConfig,
+  MAIN_OWNED_KEYS,
+  RENDERER_SETTABLE_KEYS,
+  saveConfig,
+  saveConfigFromRenderer,
+  updateConfig,
+} from './configStore';
+import { CharacterSchema, UserConfigSchema } from '../shared/characterSchema';
+
+const UUID_A = '11111111-1111-4111-8111-111111111111';
+const UUID_B = '22222222-2222-4222-8222-222222222222';
+
+/**
+ * Write a character JSON + index entry straight to disk (bypassing
+ * characterStore.saveCharacter, whose fire-and-forget cloud-sync enqueue would
+ * error after the tmpdir teardown). listCharacters reads index.json + each file.
+ */
+async function writeChar(id: string, playtime_ms: number): Promise<void> {
+  await mkdir(paths.charactersDir(), { recursive: true });
+  const char = CharacterSchema.parse({
+    id,
+    name: 'C',
+    persona: { source: 'x', expanded: '' },
+    created: '2026-01-01T00:00:00.000Z',
+    playtime_ms,
+  });
+  await writeFile(paths.characterPath(id), JSON.stringify(char, null, 2));
+}
+async function writeIndex(order: string[]): Promise<void> {
+  await mkdir(paths.charactersDir(), { recursive: true });
+  await writeFile(paths.indexPath(), JSON.stringify({ version: 1, order }, null, 2));
+}
+
+let tmp: string;
+beforeEach(async () => {
+  tmp = await mkdtemp(path.join(tmpdir(), 'sei-cfg-'));
+  _setUserDataOverride(tmp);
+});
+afterEach(async () => {
+  _setUserDataOverride(null);
+  setActiveScope('local');
+  await rm(tmp, { recursive: true, force: true });
+});
+
+describe('addPlaytimeMs', () => {
+  it('seeds from zero when no config file exists yet', async () => {
+    await addPlaytimeMs(1000);
+    expect((await loadConfig()).total_playtime_ms).toBe(1000);
+  });
+
+  it('accumulates across calls', async () => {
+    await addPlaytimeMs(1000);
+    await addPlaytimeMs(2500);
+    expect((await loadConfig()).total_playtime_ms).toBe(3500);
+  });
+
+  it('ignores zero / negative / non-finite deltas', async () => {
+    await addPlaytimeMs(0);
+    await addPlaytimeMs(-50);
+    await addPlaytimeMs(Number.NaN);
+    expect((await loadConfig()).total_playtime_ms).toBe(0);
+  });
+
+  it('rounds fractional ms', async () => {
+    await addPlaytimeMs(1000.7);
+    expect((await loadConfig()).total_playtime_ms).toBe(1001);
+  });
+
+  it('preserves other config fields', async () => {
+    await saveConfig({ ...(await loadConfig()), preferred_name: 'Ouen' });
+    await addPlaytimeMs(1234);
+    const cfg = await loadConfig();
+    expect(cfg.preferred_name).toBe('Ouen');
+    expect(cfg.total_playtime_ms).toBe(1234);
+  });
+});
+
+describe('saveConfigFromRenderer', () => {
+  it('a stale renderer copy can never revert ai_backend_kind (the recurring "switched back to local" bug)', async () => {
+    // The exact failure sequence: SettingsScreen snapshots the config at
+    // mount, the user confirms Switch to cloud (setAiBackendKind path writes
+    // cloud-proxy/user), then any toggle saves the whole stale copy back.
+    const mountSnapshot = await loadConfig(); // ai_backend_kind: 'local'
+    await saveConfig({
+      ...(await loadConfig()),
+      ai_backend_kind: 'cloud-proxy',
+      ai_backend_kind_source: 'user',
+    });
+    await saveConfigFromRenderer({ ...mountSnapshot, preferred_name: 'Renamed' });
+    const cfg = await loadConfig();
+    expect(cfg.ai_backend_kind).toBe('cloud-proxy');
+    expect(cfg.ai_backend_kind_source).toBe('user');
+    expect(cfg.preferred_name).toBe('Renamed'); // the actual edit still lands
+  });
+
+  it('a stale renderer copy can never revert chat_language (260725: auto-detected in main)', async () => {
+    const mountSnapshot = await loadConfig(); // chat_language absent (≡ 'en')
+    // The voice auto-switch lands a detection mid-call...
+    await saveConfig({ ...(await loadConfig()), chat_language: 'es' });
+    // ...then an open Settings screen saves its stale whole-config copy back.
+    await saveConfigFromRenderer({ ...mountSnapshot, preferred_name: 'Renamed' });
+    const cfg = await loadConfig();
+    expect(cfg.chat_language).toBe('es');
+    expect(cfg.preferred_name).toBe('Renamed');
+  });
+
+  it('seeds a fresh profile with the schema defaults (signed-out onboarding)', async () => {
+    await saveConfigFromRenderer({
+      ...(await loadConfig()),
+      preferred_name: 'Ouen',
+      ai_backend_kind: 'cloud-proxy', // renderer-supplied value is ignored
+    });
+    const cfg = await loadConfig();
+    expect(cfg.preferred_name).toBe('Ouen');
+    expect(cfg.ai_backend_kind).toBe('local');
+  });
+
+  it('260725: a stale renderer copy can never clobber a main-written field (playtime folded mid-session)', async () => {
+    // SettingsScreen snapshots the whole config at mount and saves
+    // `{...cfg, field}` on every toggle. A 2h Minecraft session ends while it
+    // stays mounted (foldPlaytime -> addPlaytimeMs under the lock); the next
+    // toggle must not write the pre-session total back.
+    const mountSnapshot = await loadConfig(); // total_playtime_ms: 0
+    await addPlaytimeMs(2 * 60 * 60 * 1000);
+    await saveConfigFromRenderer({ ...mountSnapshot, realistic_typing: false });
+    const cfg = await loadConfig();
+    expect(cfg.total_playtime_ms).toBe(7_200_000);
+    expect(cfg.realistic_typing).toBe(false); // the actual edit still lands
+  });
+
+  it('260725: main-owned lists and refs survive a stale renderer save', async () => {
+    const mountSnapshot = await loadConfig();
+    // Main writes while the settings copy is stale: a World character added to
+    // the library, a profile picture applied, a character created.
+    await saveConfig({
+      ...(await loadConfig()),
+      added_world_ids: [UUID_A],
+      profile_picture: '_user.png',
+      creation_times: ['2026-07-25T00:00:00.000Z'],
+    });
+    await saveConfigFromRenderer({ ...mountSnapshot, theme_mode: 'acorn' });
+    const cfg = await loadConfig();
+    expect(cfg.added_world_ids).toEqual([UUID_A]);
+    expect(cfg.profile_picture).toBe('_user.png');
+    expect(cfg.creation_times).toEqual(['2026-07-25T00:00:00.000Z']);
+    expect(cfg.theme_mode).toBe('acorn');
+  });
+
+  it('an optional key the renderer copy never carried keeps its on-disk value', async () => {
+    const mountSnapshot = await loadConfig(); // stt_local_fallback absent
+    // The voice store accepts the local-backup offer mid-call...
+    await saveConfig({ ...(await loadConfig()), stt_local_fallback: true });
+    // ...and a Settings toggle whose copy predates it must not unset it.
+    await saveConfigFromRenderer({ ...mountSnapshot, call_captions: true });
+    const cfg = await loadConfig();
+    expect(cfg.stt_local_fallback).toBe(true);
+    expect(cfg.call_captions).toBe(true);
+  });
+
+  it('keeps a sign-in cloud default written before onboarding submits', async () => {
+    // switchScopeForAuth → applyCloudDefaultForSignIn writes this before the
+    // renderer routes to onboarding, so onboarding's wholesale save must not
+    // undo it.
+    await saveConfig({
+      ...(await loadConfig()),
+      ai_backend_kind: 'cloud-proxy',
+      ai_backend_kind_source: 'default',
+    });
+    await saveConfigFromRenderer({
+      ...(await loadConfig()),
+      preferred_name: 'Ouen',
+      ai_backend_kind: 'local',
+      ai_backend_kind_source: 'default',
+    });
+    const cfg = await loadConfig();
+    expect(cfg.ai_backend_kind).toBe('cloud-proxy');
+    expect(cfg.preferred_name).toBe('Ouen');
+  });
+  it('260929: a stale renderer copy never reverts the game-end keys (chess difficulty, Draw! intro)', async () => {
+    const mountSnapshot = await loadConfig();
+    // A chess game and a Draw! intro end while Settings stays mounted.
+    await updateConfig((cfg) => ({ ...cfg, chess_elo_offsets: { [UUID_A]: -100 } }));
+    await updateConfig((cfg) => ({ ...cfg, draw_intro_done: true }));
+    await saveConfigFromRenderer({
+      ...mountSnapshot,
+      chess_elo_offsets: {},
+      draw_intro_done: false,
+      theme_mode: 'mint',
+    });
+    const cfg = await loadConfig();
+    expect(cfg.chess_elo_offsets).toEqual({ [UUID_A]: -100 });
+    expect(cfg.draw_intro_done).toBe(true);
+    expect(cfg.theme_mode).toBe('mint');
+  });
+
+  it('260929: the Minecraft setup dismissal (renderer-owned) persists', async () => {
+    await saveConfigFromRenderer({ ...(await loadConfig()), mc_setup_dismissed: true });
+    expect((await loadConfig()).mc_setup_dismissed).toBe(true);
+  });
+
+  it('every UserConfig key is either renderer-settable or main-owned, never both', () => {
+    const renderer = new Set<string>(RENDERER_SETTABLE_KEYS);
+    const main = new Set<string>(MAIN_OWNED_KEYS);
+    expect([...renderer].filter((k) => main.has(k))).toEqual([]);
+    expect([...renderer, ...main].sort()).toEqual(Object.keys(UserConfigSchema.shape).sort());
+  });
+});
+
+describe('updateConfig', () => {
+  it('260929: a mutate that changes nothing does not rewrite the file', async () => {
+    await saveConfig({ ...(await loadConfig()), preferred_name: 'Ouen' });
+    const old = new Date('2020-01-01T00:00:00Z');
+    await utimes(paths.configPath(), old, old);
+    const out = await updateConfig((cfg) => cfg);
+    expect(out.preferred_name).toBe('Ouen');
+    expect((await stat(paths.configPath())).mtimeMs).toBe(old.getTime());
+    // A real change still writes.
+    await updateConfig((cfg) => ({ ...cfg, preferred_name: 'Sui' }));
+    expect((await stat(paths.configPath())).mtimeMs).not.toBe(old.getTime());
+    expect((await loadConfig()).preferred_name).toBe('Sui');
+  });
+
+  it('260929: opts.scope writes the named profile, not the active one', async () => {
+    setActiveScope(UUID_B);
+    await updateConfig((cfg) => ({ ...cfg, preferred_name: 'A' }), { scope: UUID_A });
+    expect((await loadConfig()).preferred_name).toBe(''); // active (B) untouched
+    const raw = JSON.parse(await (await import('node:fs/promises')).readFile(
+      path.join(profileRootFor(UUID_A), 'config.json'),
+      'utf8',
+    ));
+    expect(raw.preferred_name).toBe('A');
+    setActiveScope(UUID_A);
+    expect((await loadConfig()).preferred_name).toBe('A');
+  });
+});
+
+describe('backfillTotalPlaytimeOnce', () => {
+  it('seeds the total from the sum of existing characters, once', async () => {
+    await writeChar(UUID_A, 1000);
+    await writeChar(UUID_B, 2500);
+    await writeIndex([UUID_A, UUID_B]);
+
+    await backfillTotalPlaytimeOnce();
+    let cfg = await loadConfig();
+    expect(cfg.total_playtime_ms).toBe(3500);
+    expect(cfg.total_playtime_backfilled).toBe(true);
+
+    // Idempotent: a second run (even after more time accrues) does NOT re-sum.
+    await addPlaytimeMs(500); // a later session → 4000
+    await backfillTotalPlaytimeOnce();
+    cfg = await loadConfig();
+    expect(cfg.total_playtime_ms).toBe(4000);
+  });
+
+  it('never shrinks an already-advanced total', async () => {
+    await writeChar(UUID_A, 1000);
+    await writeIndex([UUID_A]);
+    await addPlaytimeMs(9000); // total raced ahead before first backfill
+    await backfillTotalPlaytimeOnce();
+    expect((await loadConfig()).total_playtime_ms).toBe(9000); // max(9000, 1000)
+  });
+});

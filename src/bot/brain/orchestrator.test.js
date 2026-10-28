@@ -1,0 +1,1172 @@
+// src/bot/brain/orchestrator.test.js
+//
+// 260608-tik coverage:
+//   1. NUDGES.actionTurn — the unified "you are mid-action" template (Change 2),
+//      exercised in both the silent-monitor and player-message variants.
+//   2. Change 1 — a player chat that lands while an action is in flight (loop
+//      suspended on a long-runner, no Haiku call parked) must NOT abort the
+//      action. It drives a tick-style turn instead; the model is free to reply,
+//      switch, or stop. This is the behavioral heart of the change, so it runs
+//      against a real orchestrator with a scripted LLM provider + mock adapter.
+
+import os from 'node:os'
+import path from 'node:path'
+import fs from 'node:fs/promises'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { z } from 'zod'
+import { NUDGES, GREETING_HINT, memoryGameScope, chatContinuityGameScope, PERSONALITY_TOOL_DESCRIPTIONS } from './prompts.js'
+import {
+  createOrchestrator,
+  composeSeedBlocks,
+  _setTickIntervalForTests,
+  appendProcedureOnce,
+} from './orchestrator.js'
+
+// ───────────────────────── Change 2: template ─────────────────────────
+
+describe('NUDGES.actionTurn (260608-tik)', () => {
+  it('player-message variant quotes the speaker + words and names the stop tool', () => {
+    const t = NUDGES.actionTurn({
+      action: 'follow Steve',
+      stopTool: 'unfollow',
+      playerLine: 'wait here',
+      who: 'Steve',
+    })
+    expect(t).toContain('follow Steve')
+    expect(t).toContain('Steve said: "wait here"')
+    // 260616 (#2): chat mid-action is answered while the action carries on.
+    // 261018 (pass 15): the frame is balanced, no "KEEP GOING" default: a
+    // come / follow / go / stop / stay line is a switch made in this turn.
+    expect(t).toMatch(/answer with one short say\(\)|stay silent/i)
+    expect(t).not.toContain('KEEP GOING')
+    expect(t).toContain('answer it and let the action carry on')
+    expect(t).toContain('If they ask you to come to them or follow them, or point out where they are, call the action that takes you to them')
+    expect(t).toContain('If they ask you to stop or to stay where you are, call unfollow')
+    expect(t).toContain('make the switch in this same turn, even when the current action is one they asked for')
+    expect(t).toContain('asked for once you finish what you are doing now is not a switch')
+    // 261018 (pass 17): a changed count or item re-calls the action; a line
+    // that drops the job and asks for a new one calls only the new action.
+    expect(t).toContain('If they change the job you are on, like how many or which item, call that action again with the new details')
+    expect(t).toContain('call only the new action; calling unfollow and saying you will do it next leaves them waiting')
+    expect(t).toContain('To stop, call unfollow')
+    expect(t).toContain('call that action')
+    // 260619 say()-leak fix: a player-addressed mid-action turn must STILL call
+    // say() even when it also acts / switches / end_loops. The model was leaking
+    // the spoken line into its private scratchpad and only calling the action,
+    // so the player heard nothing. The action is not the reply.
+    expect(t).toContain('The action is not the reply')
+    expect(t).toContain('also call say() this turn')
+    // The interrupt variant must NOT carry the silent-monitor phrasing.
+    expect(t).not.toContain('Nothing needs you')
+  })
+
+  it('not-mid-action player variant requires a spoken reply even when also acting', () => {
+    // 260619 say()-leak fix: action null + playerLine = a fresh/idle loop that a
+    // chat woke (the "where are you come to me" → silent follow case). The reply
+    // say() is mandatory and an action never substitutes for it.
+    const t = NUDGES.actionTurn({ action: null, stopTool: 'end_loop', playerLine: 'where are you come to me', who: 'Ouen' })
+    expect(t).toContain('REPLY with one short say()')
+    expect(t).toContain('taking an action never replaces it')
+  })
+
+  it('player-message variant carries the movement-intent disambiguation hint', () => {
+    // 260615: "wait for me" was being mis-read as "come to me" (Sui pathed to
+    // the player + called follow). The interrupt prompt now spells out that
+    // "wait" = THEY come to YOU = hold position, not follow.
+    const t = NUDGES.actionTurn({
+      action: 'dig',
+      stopTool: 'end_loop',
+      playerLine: 'wait for me',
+      who: 'Steve',
+    })
+    expect(t).toContain('wait for me')
+    expect(t).toContain('they are the one coming to you')
+    expect(t).toContain('do not walk toward them')
+    // The "come to them" half is still spelled out so the contrast is explicit.
+    expect(t).toContain('If they ask you to come to them or follow them')
+    // Silent-monitor ticks never carry the interrupt-only intent hint.
+    const silent = NUDGES.actionTurn({ action: 'dig', stopTool: 'end_loop', elapsedSec: 5 })
+    expect(silent).not.toContain('they are the one coming to you')
+  })
+
+  it('silent-monitor variant (no playerLine) shows elapsed + empty-text default', () => {
+    const t = NUDGES.actionTurn({
+      action: 'gather oak_log',
+      stopTool: 'end_loop',
+      elapsedSec: 12,
+    })
+    expect(t).toContain('gather oak_log (12s in)')
+    // 260616: silence = no say(). The silent-monitor branch frames this as the
+    // bot's OWN routine action with the default being NO say() and concrete
+    // banned narration, so the model stops reporting each step.
+    expect(t).toContain('OWN routine action')
+    expect(t).toContain('call NO say()')
+    expect(t).toContain('milestone or discovery')
+    // 260616 (#4): a silent tick is a CHECK-IN, not an action channel. It must
+    // tell the model not to re-issue/swap the running action; the only action
+    // allowed is the cancel (stopTool).
+    expect(t).toContain('CHECK-IN')
+    expect(t).toMatch(/do NOT call another action|do not call another action/i)
+    expect(t).toContain('To cancel this action, call end_loop')
+    // No fabricated player quote on a silent tick.
+    expect(t).not.toContain('said:')
+  })
+
+  it('agentic + long-running follow flips the silent default to break-off-and-act (260625)', () => {
+    // Yancy bug: an agentic character (proactiveness >= 2) trapped in a follow
+    // that keeps pace with a standing player never trips the STUCK exception, so
+    // the silence-biased default kept it trailing forever — no initiative, no
+    // in-character lines. For that one case the check-in must encourage unfollow
+    // + advancing its own agenda, and allow one short in-character say().
+    const t = NUDGES.actionTurn({
+      action: 'follow Ouen',
+      stopTool: 'unfollow',
+      who: 'Ouen',
+      elapsedSec: 95,
+      proactiveness: 2,
+    })
+    expect(t).toContain('consider doing something else you find interesting')
+    expect(t).toContain('unless the player explicitly asked you to follow them')
+    expect(t).toContain('ONE short in-character say()')
+    expect(t).toContain('To break off and act, call unfollow')
+    // It must NOT carry the blanket silence default from the routine branch.
+    expect(t).not.toContain('call NO say()')
+  })
+
+  it('the agentic-follow flip is gated: non-agentic, short follows, and non-follow keep the silence default', () => {
+    // Non-agentic (default proactiveness) following → unchanged silence default.
+    const passive = NUDGES.actionTurn({ action: 'follow Ouen', stopTool: 'unfollow', elapsedSec: 95 })
+    expect(passive).toContain('call NO say()')
+    expect(passive).not.toContain('consider doing something else you find interesting')
+    // Agentic but still in the warm-up window (< 30s) → not yet flipped.
+    const warmup = NUDGES.actionTurn({ action: 'follow Ouen', stopTool: 'unfollow', elapsedSec: 10, proactiveness: 2 })
+    expect(warmup).toContain('call NO say()')
+    expect(warmup).not.toContain('consider doing something else you find interesting')
+    // Agentic + long-running but a genuinely-completing action (gather, not
+    // follow) → keep the silence default; only follow is the passive trap.
+    const gather = NUDGES.actionTurn({ action: 'gather oak_log', stopTool: 'end_loop', elapsedSec: 95, proactiveness: 2 })
+    expect(gather).toContain('call NO say()')
+    expect(gather).not.toContain('consider doing something else you find interesting')
+  })
+
+  it('omits the speaker name when who is absent, falls back when action is null', () => {
+    const noWho = NUDGES.actionTurn({ action: 'dig', stopTool: 'end_loop', playerLine: 'hi' })
+    expect(noWho).toContain('said: "hi"')
+    expect(noWho).not.toContain('undefined')
+
+    const noAction = NUDGES.actionTurn({ action: null, stopTool: 'end_loop', elapsedSec: null })
+    expect(noAction).toContain('your action')
+    expect(noAction).not.toContain('(null')
+  })
+
+  // 260703: session-end vs task-stop disambiguation (live-session bug — the bot
+  // said goodbye three times in a row and never left, because every per-turn
+  // addendum only ever named end_loop/stopTool and never mentioned quit). Every
+  // player-message variant of actionTurn must name quit for session-end phrasing,
+  // distinct from the stopTool it names for pausing a task.
+  it('mid-action player-message variant distinguishes stopping a task from ending the session (names quit)', () => {
+    const t = NUDGES.actionTurn({
+      action: 'gather oak_log',
+      stopTool: 'end_loop',
+      playerLine: "lets call it here for now",
+      who: 'Ouen',
+    })
+    expect(t).toContain('call end_loop')
+    expect(t).toContain('ENDING THE SESSION')
+    expect(t).toContain('call quit')
+    expect(t).toContain('farewell')
+    expect(t).toMatch(/"bye".*"cya"|cya/i)
+  })
+
+  it('not-mid-action player-message variant also names quit for session-end phrasing', () => {
+    const t = NUDGES.actionTurn({ action: null, stopTool: 'end_loop', playerLine: 'cya', who: 'Ouen' })
+    expect(t).toContain('ENDING THE SESSION')
+    expect(t).toContain('call quit')
+    expect(t).toContain('farewell')
+  })
+
+  it('the silent-monitor variant (no player message) does NOT mention quit', () => {
+    // Session-end guidance only makes sense as a reaction to something the
+    // player said, so it must not leak into the routine self-check-in tick.
+    const silent = NUDGES.actionTurn({ action: 'gather oak_log', stopTool: 'end_loop', elapsedSec: 12 })
+    expect(silent).not.toContain('quit')
+  })
+})
+
+describe('NUDGES.playerInterruptHint — session-end disambiguation (260703)', () => {
+  it('names quit as distinct from stopping a task, with concrete trigger phrases', () => {
+    const t = NUDGES.playerInterruptHint
+    expect(t).toContain('call stop')
+    expect(t).toContain('ENDING THE SESSION')
+    expect(t).toContain('call quit')
+    expect(t).toContain('farewell')
+    expect(t).toMatch(/"bye".*"cya"|cya/i)
+  })
+})
+
+// 260630: the verbose anti-filler / say-discipline rules that BASELINE_INSTRUCTIONS
+// used to assert moved out when the minecraft surface baseline was replaced with
+// the concise surface-decoupled version (the universal "you are not an assistant"
+// rule + the say()/silence contract now carry that weight). The old
+// BASELINE_INSTRUCTIONS anti-filler test was removed with it.
+
+// ──────────────────── Change 1: no-abort routing ────────────────────
+
+// A scripted LLM provider standing in for the Anthropic client. `call` returns
+// the next scripted response and records its arguments so the test can inspect
+// the prompt the model actually saw.
+function makeProvider(script) {
+  let i = 0
+  const calls = []
+  return {
+    calls,
+    buildCachedSystem: (blocks /*, tools */) => blocks,
+    setAuthToken() {},
+    setBackend() {},
+    async call(args) {
+      calls.push(args)
+      const r = script[Math.min(i, script.length - 1)]
+      i += 1
+      return typeof r === 'function' ? r(args) : r
+    },
+  }
+}
+
+// Minimal game adapter. `follow` returns a never-resolving promise so the loop
+// suspends on it as a live long-runner; the test captures that action's
+// AbortSignal to prove it is never aborted.
+function makeAdapter() {
+  const ACTIONS = ['follow', 'unfollow', 'goTo', 'gather', 'dig', 'attackEntity']
+  const captured = { signal: null, executed: [] }
+  const adapter = {
+    listActions: () => ACTIONS,
+    getActionSchema: () =>
+      z.object({ player: z.string().optional(), times: z.number().optional() }),
+    getActionDescription: (n) => `do ${n}`,
+    capabilityParagraph: () => 'caps',
+    worldPrimer: () => 'world',
+    actionRules: () => 'rules',
+    eventAddendum: () => '',
+    createSnapshotComposer: () => ({ next: () => 'SNAPSHOT' }),
+    chat: vi.fn(),
+    closeAnySessions: async () => {},
+    executeAction: (name, args, opts) => {
+      captured.executed.push(name)
+      if (name === 'follow') {
+        captured.signal = opts?.signal ?? null
+        return new Promise(() => {}) // pending forever → suspends the loop
+      }
+      return Promise.resolve('done')
+    },
+  }
+  return { adapter, captured }
+}
+
+function makeConfig() {
+  return {
+    player_username: 'Steve',
+    preferred_name: 'Steve',
+    persona: { name: 'Sei', expanded: 'You are a sharp little companion.' },
+    anthropic: { model: 'claude-haiku-4-5', timeout_ms: 20_000, max_retries: 1 },
+    llm: { provider: 'anthropic', rate_limit_per_min: 30, debounce_ms: 0, max_hops: 5 },
+    memory: {
+      memory_md_path: path.join(os.tmpdir(), `sei-orch-test-${process.pid}-${Date.now()}.md`),
+      iteration_cap: 30,
+    },
+  }
+}
+
+const chat = (text) => ({ text, username: 'Steve', playerSpoke: true, ts: Date.now() })
+
+describe('Change 1 — P1 chat during action-in-flight does not abort the action (260608-tik)', () => {
+  it('keeps the running action alive and delivers the message as a tick-style turn', async () => {
+    _setTickIntervalForTests(10_000_000) // park the 10s auto-tick so it never fires
+    const { adapter, captured } = makeAdapter()
+    const provider = makeProvider([
+      // Call 1 (fresh loop): start following → suspends on the long-runner.
+      { text: '', toolUses: [{ id: 'tu1', name: 'follow', input: { player: 'Steve' } }] },
+      // Call 2 (the interrupting chat): reply text-only → R1 keep-alive.
+      { text: 'staying right here', toolUses: [] },
+    ])
+    const orch = createOrchestrator({
+      adapter,
+      config: makeConfig(),
+      reenqueue: () => {},
+      _anthropicOverride: provider,
+    })
+
+    // Fresh loop opens and suspends on follow.
+    await orch.handleDispatch('sei:chat_received', chat('follow me'))
+    expect(provider.calls.length).toBe(1)
+    expect(orch.currentLoop).not.toBeNull()
+    expect(orch.currentLoop.inFlight?.name).toBe('follow')
+    expect(captured.signal).toBeTruthy()
+    expect(captured.signal.aborted).toBe(false)
+
+    // A second chat lands while follow is in flight.
+    await orch.handleDispatch('sei:chat_received', chat('actually wait a sec'))
+
+    // Core assertion: the follow action's signal was NOT aborted.
+    expect(captured.signal.aborted).toBe(false)
+    // follow was started exactly once (never restarted), still in flight.
+    expect(captured.executed.filter((n) => n === 'follow').length).toBe(1)
+    expect(orch.currentLoop).not.toBeNull()
+    expect(orch.currentLoop.inFlight?.name).toBe('follow')
+
+    // A second Haiku turn fired, carrying the player's words + the right stop
+    // tool (unfollow, because the live action is follow) + the in-progress
+    // tool_result proving the action was monitored, not aborted.
+    expect(provider.calls.length).toBe(2)
+    const turn2 = JSON.stringify(provider.calls[1].messages ?? provider.calls[1])
+    expect(turn2).toContain('actually wait a sec')
+    expect(turn2).toContain('unfollow')
+    expect(turn2).toContain('still in progress')
+  })
+})
+
+// ──────────── daily play limit (daily_dollar 429) — 260617 ────────────
+
+describe('daily play limit (daily_dollar 429)', () => {
+  function throwing(status, body) {
+    return () => {
+      const e = new Error('rate limited')
+      e.status = status
+      e.error = body
+      throw e
+    }
+  }
+
+  it('halts and signals DAILY_LIMIT_REACHED with the reset window, leaving quietly', async () => {
+    const { adapter } = makeAdapter()
+    const onTerminalError = vi.fn()
+    const provider = makeProvider([
+      throwing(429, { error: 'rate_limited', kind: 'daily_dollar', retry_after_seconds: 3600 }),
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, onTerminalError, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hi'))
+    expect(onTerminalError).toHaveBeenCalledTimes(1)
+    expect(onTerminalError.mock.calls[0][0]).toMatchObject({
+      error: 'DAILY_LIMIT_REACHED',
+      retryAfterSeconds: 3600,
+    })
+    // Leaves the world QUIETLY — no in-game chat line on the way out.
+    expect(adapter.chat).not.toHaveBeenCalled()
+  })
+
+  it('does NOT halt on a transient itpm 429 (that path redrives, not terminal)', async () => {
+    const { adapter } = makeAdapter()
+    const onTerminalError = vi.fn()
+    const provider = makeProvider([
+      throwing(429, { error: 'rate_limited', kind: 'itpm', retry_after_seconds: 20 }),
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, onTerminalError, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hi'))
+    expect(onTerminalError).not.toHaveBeenCalled()
+  })
+})
+
+// ──────────── unusable local Ollama model — 261010 ────────────
+
+describe('unusable Ollama model (no tools / not pulled)', () => {
+  function coded(code) {
+    return () => {
+      const e = new Error(`${code}: gemma3:12b does not support tools`)
+      e.code = code
+      throw e
+    }
+  }
+
+  for (const code of ['OLLAMA_MODEL_NO_TOOLS', 'OLLAMA_MODEL_MISSING']) {
+    it(`${code} stops the session with that class instead of a mute companion`, async () => {
+      const { adapter } = makeAdapter()
+      const onTerminalError = vi.fn()
+      const provider = makeProvider([coded(code), { text: 'never reached', toolUses: [] }])
+      const orch = createOrchestrator({
+        adapter, config: makeConfig(), reenqueue: () => {}, onTerminalError, _anthropicOverride: provider,
+      })
+      await orch.handleDispatch('sei:chat_received', chat('hi'))
+      expect(onTerminalError).toHaveBeenCalledTimes(1)
+      expect(onTerminalError.mock.calls[0][0]).toMatchObject({ error: code })
+      // Halted: a later event makes no further model call.
+      await orch.handleDispatch('sei:chat_received', chat('hello?'))
+      expect(provider.calls.length).toBe(1)
+    })
+  }
+
+  it('an unreachable Ollama is NOT terminal (it may just be restarting)', async () => {
+    const { adapter } = makeAdapter()
+    const onTerminalError = vi.fn()
+    const provider = makeProvider([coded('OLLAMA_UNREACHABLE')])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, onTerminalError, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hi'))
+    expect(onTerminalError).not.toHaveBeenCalled()
+  })
+})
+
+// ──────────── #2: player message surfaced LAST (highest salience) ────────────
+
+describe('composeSeedBlocks — player_message block (260616 #2)', () => {
+  const baseArgs = {
+    sessionState: { playerData: () => ({}) },
+    playerStore: { formatPlayerSeedBlock: () => 'PLAYER' },
+    config: { memory: {} },
+    eventText: 'Event: sei:chat_received',
+    snapshotText: 'pos: 0,64,0',
+  }
+
+  it('appends player_message as the LAST block so it reads after the snapshot', async () => {
+    const blocks = await composeSeedBlocks({
+      ...baseArgs,
+      playerMessageText: 'the player just spoke to you. respond to THIS:\n"shut up :("',
+    })
+    const last = blocks[blocks.length - 1]
+    expect(last.name).toBe('player_message')
+    expect(last.text).toContain('shut up :(')
+    // It must come AFTER the snapshot — recency is the whole point of #2.
+    const names = blocks.map((b) => b.name)
+    expect(names.indexOf('player_message')).toBeGreaterThan(names.indexOf('snapshot'))
+  })
+
+  it('adds no player_message block on non-chat turns (playerMessageText null)', async () => {
+    const blocks = await composeSeedBlocks(baseArgs)
+    expect(blocks.some((b) => b.name === 'player_message')).toBe(false)
+  })
+
+  // 261012: the note naming a word her own lines keep repeating rides right
+  // after the core (ownRepeats.js), and is absent when nothing repeats.
+  it('places own_repeats right after core, and only when given', async () => {
+    const blocks = await composeSeedBlocks({ ...baseArgs, ownRepeatsText: 'Your own recent lines keep using "nya".' })
+    const names = blocks.map((b) => b.name)
+    expect(names.indexOf('own_repeats')).toBe(names.indexOf('core') + 1)
+    const none = await composeSeedBlocks(baseArgs)
+    expect(none.some((b) => b.name === 'own_repeats')).toBe(false)
+  })
+})
+
+// ─────────── 261020: game-scoped goals, memories and app chat ───────────
+// A Stardew session read a Minecraft build from the shared memory and the app
+// chat as Stardew work. The person is shared across games; a game's plans are
+// not, and the seed now says which game the session is in.
+
+describe('composeSeedBlocks — game scope (261020)', () => {
+  let tmp
+  beforeEach(async () => {
+    tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'sei-gamescope-'))
+    await fs.writeFile(path.join(tmp, 'MEMORY.md'),
+      '# Memory\n\n## World 2 — Sei Farm (Stardew Valley)\n- [2026-10-20T06:00:00.000Z] ouen likes the farm\n' +
+      '\n## In the app (texting, calls and minigames, outside any game world)\n- [2026-10-19T22:57:00.000Z] ouen is building a copper bulb lighthouse\n' +
+      '- [2026-10-19T23:00:00.000Z] Plan for next time in Minecraft: get copper for the lighthouse\n')
+    await fs.writeFile(path.join(tmp, 'HEARTBEAT.stardew.md'), '# HEARTBEAT\n- [2026-10-20T06:00:00.000Z] Plant parsnips\n')
+  })
+  afterEach(async () => { await fs.rm(tmp, { recursive: true, force: true }) })
+
+  const args = () => ({
+    sessionState: { playerData: () => ({}) },
+    playerStore: { formatPlayerSeedBlock: () => 'PLAYER' },
+    config: {
+      memory: { memory_md_path: path.join(tmp, 'MEMORY.md'), heartbeat_md_path: path.join(tmp, 'HEARTBEAT.stardew.md') },
+      persona: { proactiveness: 2 },
+      _seiContinuity: { recent: [{ role: 'user', text: 'my favorite block is copper bulb', ts: Date.now() - 60_000 }] },
+    },
+    eventText: 'Event: sei:idle',
+    snapshotText: 'world: #2 Sei Farm',
+  })
+  const text = (blocks, name) => blocks.find((b) => b.name === name)?.text ?? ''
+
+  it('labels the heartbeat and scopes memories and the app chat to the game', async () => {
+    const blocks = await composeSeedBlocks({ ...args(), gameName: 'Stardew Valley' })
+    expect(text(blocks, 'heartbeat')).toMatch(/^# HEARTBEAT: your goals and tasks in Stardew Valley\n/)
+    const memory = text(blocks, 'memory')
+    expect(memory).toContain(memoryGameScope('Stardew Valley'))
+    expect(memory).toContain('You are playing Stardew Valley now.')
+    // The memories themselves stay: the person is shared across games.
+    expect(memory).toContain('copper bulb lighthouse')
+    expect(memory).toContain('Plan for next time in Minecraft: get copper for the lighthouse')
+    expect(memory).toContain('## In the app (texting, calls and minigames, outside any game world)')
+    expect(text(blocks, 'chat_continuity')).toContain(chatContinuityGameScope('Stardew Valley'))
+  })
+
+  it('adds nothing when no game is named (hand-built configs keep their seed)', async () => {
+    const blocks = await composeSeedBlocks(args())
+    expect(text(blocks, 'heartbeat')).toMatch(/^# HEARTBEAT\n/)
+    expect(text(blocks, 'memory')).not.toContain('You are playing')
+    expect(text(blocks, 'chat_continuity')).not.toContain('a different game')
+  })
+
+  it('the scope lines are plain prose', () => {
+    for (const t of [memoryGameScope('Minecraft'), chatContinuityGameScope('Minecraft')]) {
+      expect(t).not.toMatch(/[—–]/)
+      expect(t).toContain('Minecraft')
+    }
+    expect(memoryGameScope('')).toBe('')
+    expect(chatContinuityGameScope(null)).toBe('')
+  })
+
+  it('setGoal says a goal is for this game and asks for a headline without the player name', () => {
+    expect(PERSONALITY_TOOL_DESCRIPTIONS.setGoal).toContain('A goal is for the game you are in now')
+    expect(PERSONALITY_TOOL_DESCRIPTIONS.setGoal).toContain("leaves the player's name out")
+  })
+})
+
+// ─────────── empty cuboid grammar (260909, first DST summon) ───────────
+
+describe('composeSeedBlocks — adapters without a cuboid grammar', () => {
+  const baseArgs = {
+    sessionState: { playerData: () => ({}) },
+    playerStore: { formatPlayerSeedBlock: () => 'PLAYER' },
+    config: { memory: {} },
+    eventText: 'Event: sei:idle',
+    snapshotText: 'you: Wickerbottom',
+  }
+
+  it('sends no seed_cuboid_grammar block when the adapter has no grammar (an empty text block is a 400 upstream)', async () => {
+    const blocks = await composeSeedBlocks({ ...baseArgs, adapter: {} })
+    expect(blocks.some((b) => b.name === 'seed_cuboid_grammar')).toBe(false)
+    expect(blocks.every((b) => b.text.length > 0)).toBe(true)
+    const player = blocks.find((b) => b.name === 'seed_player')
+    expect(player.cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  it('keeps the grammar block (and its breakpoint) when the adapter provides one', async () => {
+    const blocks = await composeSeedBlocks({ ...baseArgs, adapter: { cuboidGrammar: () => 'GRAMMAR' } })
+    const grammar = blocks.find((b) => b.name === 'seed_cuboid_grammar')
+    expect(grammar.text).toBe('GRAMMAR')
+    expect(grammar.cache_control).toEqual({ type: 'ephemeral' })
+    expect(blocks.find((b) => b.name === 'seed_player').cache_control).toBeUndefined()
+  })
+})
+
+// ──────────────── say() as a real tool (260617) ────────────────
+//
+// say() was promoted from a parsed text convention (extractSay) to a registered
+// inline tool: across two live runs Haiku honored the text-only say() contract
+// 0× while calling real tools reliably. These pin the contract the orchestrator
+// now enforces — say is offered every turn, emits to chat up front, and a
+// say()-only turn is "silence" for loop purposes (it speaks, then the loop ends
+// unless a world-acting tool was also called).
+
+describe('say() tool (260617)', () => {
+  it('is offered to the model every turn as an inline tool requiring `text`', async () => {
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hi'))
+    const say = provider.calls[0].tools.find((t) => t.name === 'say')
+    expect(say).toBeTruthy()
+    expect(say.input_schema.required).toContain('text')
+  })
+
+  it('a say()-only turn speaks, runs NO action, and ENDS the loop (say = silence for loop purposes)', async () => {
+    const { adapter, captured } = makeAdapter()
+    const provider = makeProvider([
+      { text: 'they greeted me — reply', toolUses: [{ id: 'tu_say', name: 'say', input: { text: 'yo whats up' } }] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hey'))
+    // The say() line reached chat...
+    expect(adapter.chat).toHaveBeenCalledWith('yo whats up')
+    // ...no world-acting tool ran...
+    expect(captured.executed).toEqual([])
+    // ...and the loop ENDED rather than suspending. This is the explicit
+    // requirement: "if no other action is called, loop ends."
+    expect(orch.currentLoop).toBeNull()
+  })
+
+  // 260725: the 256-char cap lives at the in-world send. `slice(0, 256)` counts
+  // UTF-16 code units, so a long line ending in an emoji was cut BETWEEN the
+  // halves of a surrogate pair and Minecraft rendered the leftover half as a
+  // replacement glyph. The clip now steps back off a trailing high surrogate.
+  it('clips a long in-world line on a character boundary, never mid-surrogate', async () => {
+    const { adapter } = makeAdapter()
+    // 255 plain chars + one astral emoji = 257 code units; the naive cut at 256
+    // lands inside the emoji.
+    const long = 'x'.repeat(255) + '\u{1F600}'
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'tu_say', name: 'say', input: { text: long } }] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hey'))
+    expect(adapter.chat).toHaveBeenCalledTimes(1)
+    const sent = adapter.chat.mock.calls[0][0]
+    expect(sent.length).toBeLessThanOrEqual(256) // still under the packet cap
+    expect(sent).toBe('x'.repeat(255))
+    // No unpaired surrogate survived the clip.
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(sent)).toBe(false)
+  })
+
+  it('emits nothing when the model calls no say() (silence is the default)', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([
+      { text: 'just go, nothing to say', toolUses: [{ id: 'tu_go', name: 'goTo', input: { x: 1, y: 64, z: 1 } }] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('go there'))
+    expect(adapter.chat).not.toHaveBeenCalled()
+  })
+
+  it('say() alongside an action speaks up front AND runs the action (the action drives the loop)', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter, captured } = makeAdapter()
+    const provider = makeProvider([
+      { text: 'hype + follow', toolUses: [
+        { id: 'tu_say', name: 'say', input: { text: 'watch this' } },
+        { id: 'tu_follow', name: 'follow', input: { player: 'Steve' } },
+      ] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('follow me'))
+    expect(adapter.chat).toHaveBeenCalledWith('watch this')
+    expect(captured.executed).toContain('follow')
+    // follow suspends the loop — it stays alive, with say already spoken.
+    expect(orch.currentLoop).not.toBeNull()
+    expect(orch.currentLoop.inFlight?.name).toBe('follow')
+  })
+
+  it('say() while an action runs replies WITHOUT aborting the action (R1 keep-alive)', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter, captured } = makeAdapter()
+    const provider = makeProvider([
+      // Call 1: start follow → suspends on the long-runner.
+      { text: '', toolUses: [{ id: 'tu1', name: 'follow', input: { player: 'Steve' } }] },
+      // Call 2 (a chat lands mid-follow): reply with say() only.
+      { text: 'reply, keep following', toolUses: [{ id: 'tu_say', name: 'say', input: { text: 'yeah yeah coming' } }] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('follow me'))
+    expect(orch.currentLoop?.inFlight?.name).toBe('follow')
+    expect(captured.signal.aborted).toBe(false)
+    // Chat lands while follow is in flight → say() reply, action survives.
+    await orch.handleDispatch('sei:chat_received', chat('you coming?'))
+    expect(adapter.chat).toHaveBeenCalledWith('yeah yeah coming')
+    expect(captured.signal.aborted).toBe(false)                 // follow NOT aborted
+    expect(orch.currentLoop?.inFlight?.name).toBe('follow')
+  })
+
+  it('caps speech at ONE say() per turn — extra say() calls are ignored, not spammed', async () => {
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([
+      { text: 'two lines', toolUses: [
+        { id: 's1', name: 'say', input: { text: 'first line' } },
+        { id: 's2', name: 'say', input: { text: 'second line' } },
+      ] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('hi'))
+    expect(adapter.chat).toHaveBeenCalledWith('first line')
+    expect(adapter.chat).not.toHaveBeenCalledWith('second line')
+    expect(adapter.chat).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ──────────── procedural memory write-back on milestone completion (17-04, D-08) ────────────
+//
+// The direct unit proof of D-08: when a milestone newly completes, its terse
+// known-good `procedure` is recorded ONCE into per-world memory (append +
+// compaction trigger), and never a second time for the same node id within the
+// same session. The orchestrator's milestone-complete branch calls this helper.
+
+describe('appendProcedureOnce (procedural memory write-back, D-08)', () => {
+  function deps() {
+    const memoryLog = { append: vi.fn().mockResolvedValue(1) }
+    const memoryCompactor = { maybeCompact: vi.fn().mockResolvedValue(undefined) }
+    const written = new Set()
+    const logger = { warn: vi.fn() }
+    return { memoryLog, memoryCompactor, written, logger }
+  }
+
+  it('writes the completed node\'s procedure once and triggers compaction', async () => {
+    const d = deps()
+    const node = { id: 'iron_pickaxe', procedure: 'iron: stone pickaxe -> mine iron_ore -> smelt -> craft' }
+    const wrote = await appendProcedureOnce(node, d)
+    expect(wrote).toBe(true)
+    expect(d.memoryLog.append).toHaveBeenCalledTimes(1)
+    expect(d.memoryLog.append).toHaveBeenCalledWith(node.procedure, expect.any(Date))
+    expect(d.memoryCompactor.maybeCompact).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT append a second time for the same node id in the same session (dedupe)', async () => {
+    const d = deps()
+    const node = { id: 'iron_pickaxe', procedure: 'iron: ... -> craft iron_pickaxe' }
+    expect(await appendProcedureOnce(node, d)).toBe(true)   // first completion writes
+    expect(await appendProcedureOnce(node, d)).toBe(false)  // subsequent seed: deduped
+    expect(d.memoryLog.append).toHaveBeenCalledTimes(1)     // still exactly one write
+  })
+
+  it('writes distinct procedures for distinct milestones', async () => {
+    const d = deps()
+    await appendProcedureOnce({ id: 'furnace', procedure: 'furnace: 8 cobblestone -> furnace' }, d)
+    await appendProcedureOnce({ id: 'iron_pickaxe', procedure: 'iron: ... -> iron_pickaxe' }, d)
+    expect(d.memoryLog.append).toHaveBeenCalledTimes(2)
+  })
+
+  it('is a no-op for a node with no procedure (later spine nodes leave it empty)', async () => {
+    const d = deps()
+    expect(await appendProcedureOnce({ id: 'diamonds' }, d)).toBe(false)
+    expect(await appendProcedureOnce({ id: 'diamonds', procedure: '' }, d)).toBe(false)
+    expect(await appendProcedureOnce(null, d)).toBe(false)
+    expect(d.memoryLog.append).not.toHaveBeenCalled()
+  })
+
+  it('is best-effort: a throwing memoryLog never propagates', async () => {
+    const d = deps()
+    d.memoryLog.append = vi.fn().mockRejectedValue(new Error('disk full'))
+    await expect(appendProcedureOnce({ id: 'furnace', procedure: 'furnace: ...' }, d)).resolves.toBe(false)
+    expect(d.logger.warn).toHaveBeenCalled()
+  })
+})
+
+// ──────────── remember() nudges + same-batch remember/say/quit (260703b) ────────────
+//
+// Live-session evidence (character "Marv"): across 8 sessions MEMORY.md gained 3
+// entries, 2 near-duplicates — nothing ever nudged the model toward remember().
+// Two nudges now do (SESSION_END_CLAUSE + the preference-capture sentence in
+// playerInterruptHint), and the orchestrator guarantees a remember() in the same
+// batch as quit() still lands (inline metadata executes in batch order; quit's
+// teardown is deferred on a >=250ms timer while memoryLog.append is awaited).
+
+describe('remember() nudges (260703b)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a player-message turn carries the session-end remember guidance alongside quit', async () => {
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('gtg, cya'))
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('ENDING THE SESSION')
+    expect(turn).toContain('remember, say, and quit_game can all be called together')
+  })
+
+  it('a player-message turn carries the preference-capture nudge', async () => {
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('you should say hi to me next time when u join'))
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('record it with remember() in the same turn')
+    expect(turn).toContain('that is exactly what memory is for')
+  })
+
+  it('remember() + say() + quit() in ONE turn: the memory write lands AND quit proceeds (remember AFTER quit in batch order)', async () => {
+    vi.useFakeTimers()
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    // remember is deliberately placed AFTER quit — quit's terminate=true only
+    // gates non-inline tools, so a later inline remember() must still execute.
+    const provider = makeProvider([
+      { text: '', toolUses: [
+        { id: 's1', name: 'say', input: { text: 'later, keep the base safe' } },
+        { id: 'q1', name: 'quit_game', input: { farewell: 'cya nerd' } },
+        { id: 'r1', name: 'remember', input: { text: 'player wants a hello whenever I join' } },
+      ] },
+    ])
+    const onQuitRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({
+      adapter, config, reenqueue: () => {}, onQuitRequested, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('bye!'))
+
+    // The memory write actually happened — the entry is on disk.
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('player wants a hello whenever I join')
+    // The say() line reached chat; the quit() farewell is SUPPRESSED because a
+    // say() already spoke this turn (260706 double-goodbye guard — otherwise the
+    // two goodbyes would land back-to-back).
+    expect(adapter.chat).toHaveBeenCalledWith('later, keep the base safe')
+    expect(adapter.chat).not.toHaveBeenCalledWith('cya nerd')
+    // Quit still proceeds — teardown fires once the goodbye defer elapses.
+    expect(onQuitRequested).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(onQuitRequested).toHaveBeenCalledTimes(1)
+    // The loop ended (quit is terminal).
+    expect(orch.currentLoop).toBeNull()
+  })
+})
+
+// ──────────── sticky greeting hint (260703b) ────────────
+//
+// Live-session evidence: loop-1 (the first idle tick carrying FIRST CONTACT) was
+// preempted 6s in by sei:attacked (a phantom), the greeting instruction existed
+// only on that one event, and the player later complained "u should say hi to me
+// next time when u join". The greet instruction is now sticky: until ANY say()
+// line reaches chat this session, every composed turn carries GREETING_HINT
+// (except the first idle tick, where the full FIRST CONTACT block already rides).
+
+describe('sticky greeting hint (260703b)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('survives a FIRST CONTACT loop preempted by an attack, and clears once a say() emits', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    let releaseFirstCall
+    const provider = makeProvider([
+      // Call 1 — the FIRST CONTACT idle tick. Hangs so the attack preempts it
+      // BEFORE the LLM returns (the exact live failure shape).
+      () => new Promise((res) => { releaseFirstCall = res }),
+      // Call 2 — the attack loop: the model greets (and ends the loop).
+      { text: '', toolUses: [
+        { id: 's1', name: 'say', input: { text: 'yo, rough landing' } },
+        { id: 'el1', name: 'end_loop', input: {} },
+      ] },
+      // Call 3 — a later idle tick, after the greeting was spoken.
+      { text: '', toolUses: [] },
+    ])
+    const reenqueued = []
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(),
+      reenqueue: (ev, d) => reenqueued.push([ev, d]),
+      _anthropicOverride: provider,
+    })
+
+    // First idle tick opens the FIRST CONTACT loop; the LLM call is in flight.
+    const p1 = orch.handleDispatch('sei:idle', { reason: 'just_connected_first_spawn', quietMs: 0 })
+    // (261011: the seed now reads MEMORY.md for the FIRST CONTACT variant, so
+    // the call can take a few more ticks to start.)
+    for (let i = 0; i < 20 && provider.calls.length === 0; i++) await flush()
+    expect(provider.calls.length).toBe(1)
+
+    // The attack lands before the LLM returns — the FIRST CONTACT loop dies and
+    // the attack is re-enqueued for a fresh loop.
+    await orch.handleDispatch('sei:attacked', { attackerLabel: 'phantom', attackerKind: 'mob' })
+    releaseFirstCall({ text: '', toolUses: [] })
+    await p1
+    expect(orch.currentLoop).toBeNull()
+
+    // The first idle tick carried the FULL block, and never the short hint
+    // (no double-inject on the first tick).
+    const turn1 = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn1).toContain('FIRST CONTACT')
+    expect(turn1).not.toContain(GREETING_HINT)
+
+    // Dispatch the re-fired attack like the FSM would: its prompt must carry
+    // the sticky hint — the greeting instruction survived the preempt.
+    const atk = reenqueued.find(([ev]) => ev === 'sei:attacked')
+    expect(atk).toBeTruthy()
+    await orch.handleDispatch('sei:attacked', atk[1])
+    const turn2 = JSON.stringify(provider.calls[1].messages ?? provider.calls[1])
+    expect(turn2).toContain(GREETING_HINT.slice(0, 40))
+    // The greeting reached chat this time.
+    expect(adapter.chat).toHaveBeenCalledWith('yo, rough landing')
+    expect(orch.currentLoop).toBeNull()
+
+    // Once a say() line has emitted, subsequent turns carry NO hint.
+    await orch.handleDispatch('sei:idle', { quietMs: 60_000 })
+    expect(provider.calls.length).toBe(3)
+    const turn3 = JSON.stringify(provider.calls[2].messages ?? provider.calls[2])
+    expect(turn3).not.toContain(GREETING_HINT.slice(0, 40))
+  })
+
+  it('rides ungreeted player-chat turns too, and a quit farewell counts as the greeting', async () => {
+    vi.useFakeTimers()
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([
+      // Call 1 — a chat turn before anything was ever said: hint must ride.
+      { text: '', toolUses: [{ id: 'q1', name: 'quit_game', input: { farewell: 'fine cya then' } }] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(), reenqueue: () => {}, onQuitRequested: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('actually gtg, bye'))
+    const turn1 = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn1).toContain(GREETING_HINT.slice(0, 40))
+    // The farewell rode the shared say pipeline — it flips the greeted flag.
+    expect(adapter.chat).toHaveBeenCalledWith('fine cya then')
+  })
+})
+
+// ──────────── player_message scratchpad contract (260703b) ────────────
+//
+// Live-session evidence: on "yo" the model wrote "yo." into its private text and
+// called placeBlock with NO say() — the player got silence. The player_message
+// block now spells out that the text output is a scratchpad the player never sees.
+
+describe('player_message block — scratchpad contract (260703b)', () => {
+  it('tells the model its text output is a private scratchpad the player can never see', async () => {
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: 'yo.', toolUses: [] }])
+    const orch = createOrchestrator({
+      adapter, config: makeConfig(),
+      // sessionState + playerStore stubs so the seed path composes the
+      // player_message block (the fallback seed omits it).
+      sessionState: { playerData: () => ({}), onLoopTerminal: async () => {} },
+      playerStore: { formatPlayerSeedBlock: () => 'PLAYER' },
+      reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('yo'))
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('private scratchpad the player can NEVER see')
+    expect(turn).toContain('only say() reaches them')
+  })
+})
+
+// ──────────── memory-tool hoist at batch split (260708) ────────────
+//
+// Live-session bug (Lyra post-mortem): the model called follow(...) +
+// remember(...) in ONE turn. follow suspended the loop via startLongRunner and
+// the remember was stashed on loop._pendingToolUses — where an action_tick
+// reclaim, a P0/P1 preempt, or drainPendingToolsOnTeardown (world-tools-only
+// filter) silently discarded it. The memory sha never changed all session.
+// The fix hoists MEMORY_METADATA (remember/forget/setGoal/clearGoal) at
+// batch-split time: they execute BEFORE the first world tool dispatches, so
+// they can never be stranded on the pending queue.
+
+describe('memory-tool hoist at batch split (260708)', () => {
+  it('a remember() batched AFTER a suspending world tool lands on disk before the action settles', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const { adapter, captured } = makeAdapter()
+    const provider = makeProvider([
+      // remember deliberately AFTER follow — the failing order from the live
+      // session. follow's promise never resolves, so if the remember were
+      // queued behind it, it would never run in this test at all.
+      { text: '', toolUses: [
+        { id: 'f1', name: 'follow', input: { player: 'Steve' } },
+        { id: 'r1', name: 'remember', input: { text: 'sei wants a house for the two of us' } },
+      ] },
+    ])
+    const orch = createOrchestrator({
+      adapter, config, reenqueue: () => {}, _anthropicOverride: provider,
+    })
+    await orch.handleDispatch('sei:chat_received', chat('remember: house for us'))
+
+    // The loop is suspended on the never-settling follow, yet the memory write
+    // has ALREADY happened — it did not wait for action_complete.
+    expect(captured.executed).toContain('follow')
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('sei wants a house for the two of us')
+  })
+})
+
+// ──────────── next-time hook on goodbyes (261008) ────────────
+//
+// Retention fix 2(c): quit_game / end_call take an optional next_time field.
+// When the model fills it, the step is saved to MEMORY.md (where the next
+// greeting reads it) and the host is told a hook was left, which is all
+// bot_session_ended / voice_call_ended record. The farewell is untouched.
+
+describe('next_time hook on goodbye tools (261008)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('both goodbye tools offer next_time', async () => {
+    let tools = null
+    const provider = { ...makeProvider([{ text: '', toolUses: [] }]), buildCachedSystem: (blocks, t) => { tools = t; return blocks } }
+    const { adapter } = makeAdapter()
+    createOrchestrator({ adapter, config: makeConfig(), reenqueue: () => {}, _anthropicOverride: provider })
+    for (const name of ['quit_game', 'end_call']) {
+      const tool = tools.find((t) => t.name === name)
+      expect(tool.input_schema.properties.next_time.type).toBe('string')
+      expect(tool.input_schema.required ?? []).not.toContain('next_time')
+      expect(tool.input_schema.properties.next_time_for_player.type).toBe('string')
+      expect(tool.input_schema.required ?? []).not.toContain('next_time_for_player')
+      expect(tool.input_schema.properties.next_time_game.type).toBe('string')
+      expect(tool.input_schema.required ?? []).not.toContain('next_time_game')
+    }
+  })
+
+  it('quit_game with next_time saves the plan to memory and reports the hook', async () => {
+    vi.useFakeTimers()
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'q1', name: 'quit_game', input: { farewell: 'cya, next time we finish the roof', next_time: '  finish the\n cabin roof ', next_time_for_player: 'finish the cabin roof tomorrow.' } }] },
+    ])
+    const onQuitRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onQuitRequested, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:chat_received', chat('gtg, bye'))
+
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('Plan for next time in Minecraft: finish the cabin roof')
+    // The model's own farewell is spoken as written.
+    expect(adapter.chat).toHaveBeenCalledWith('cya, next time we finish the roof')
+    await vi.advanceTimersByTimeAsync(11_000)
+    // 261014: the player line rides to main (Home card), cleaned; it is not saved to memory.
+    expect(onQuitRequested).toHaveBeenCalledWith({ nextStepHook: true, nextStepLine: 'Finish the cabin roof', nextStepGame: null })
+    expect(md).not.toContain('Finish the cabin roof')
+  })
+
+  it('quit_game without next_time writes nothing and reports no hook', async () => {
+    vi.useFakeTimers()
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'q1', name: 'quit_game', input: { farewell: 'cya', next_time: '   ' } }] },
+    ])
+    const onQuitRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onQuitRequested, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:chat_received', chat('bye'))
+
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8').catch(() => '')
+    expect(md).not.toContain('Plan for next time')
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(onQuitRequested).toHaveBeenCalledWith({ nextStepHook: false, nextStepLine: null, nextStepGame: null })
+  })
+
+  it('end_call with next_time saves the plan and reports the hook', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'e1', name: 'end_call', input: { farewell: 'night, village hunt tomorrow', next_time: 'find a village for beds', next_time_game: 'Minecraft' } }] },
+      { text: '', toolUses: [] },
+    ])
+    const onCallEndRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onCallEndRequested, _anthropicOverride: provider })
+    orch.setVoiceCall(true)
+    await orch.handleDispatch('sei:chat_received', { ...chat('night sui'), voice: true })
+
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('Plan for next time in Minecraft: find a village for beds')
+    expect(onCallEndRequested).toHaveBeenCalledWith({ nextStepHook: true, nextStepLine: null, nextStepGame: 'minecraft' })
+  })
+
+  // 261020 (review): a plan said while leaving one game can be for another.
+  it('quit_game with next_time_game labels and reports the named game, not this one', async () => {
+    vi.useFakeTimers()
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'q1', name: 'quit_game', input: { farewell: 'cya, parsnips next time', next_time: 'plant the parsnips on the farm', next_time_game: 'Stardew Valley' } }] },
+    ])
+    const onQuitRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onQuitRequested, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:chat_received', chat('gtg'))
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('Plan for next time in Stardew Valley: plant the parsnips on the farm')
+    expect(md).not.toContain('in Minecraft: plant')
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(onQuitRequested).toHaveBeenCalledWith({ nextStepHook: true, nextStepLine: null, nextStepGame: 'stardew' })
+  })
+
+  it('end_call with next_time_game none saves the plan with no game', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'e1', name: 'end_call', input: { farewell: 'night, good luck', next_time: 'ask how the interview went', next_time_game: 'none' } }] },
+      { text: '', toolUses: [] },
+    ])
+    const onCallEndRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onCallEndRequested, _anthropicOverride: provider })
+    orch.setVoiceCall(true)
+    await orch.handleDispatch('sei:chat_received', { ...chat('night sui'), voice: true })
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('Plan for next time: ask how the interview went')
+    expect(onCallEndRequested).toHaveBeenCalledWith({ nextStepHook: true, nextStepLine: null, nextStepGame: 'none' })
+  })
+
+  // Delta review: main tags an end_call plan with no field as a call plan
+  // (goodbyePlanPlace), so the memory line must not name this game.
+  it('end_call that leaves next_time_game out saves the plan with no game', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const config = makeConfig()
+    const provider = makeProvider([
+      { text: '', toolUses: [{ id: 'e1', name: 'end_call', input: { farewell: 'night', next_time: 'ask how the interview went' } }] },
+      { text: '', toolUses: [] },
+    ])
+    const onCallEndRequested = vi.fn()
+    const { adapter } = makeAdapter()
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, onCallEndRequested, _anthropicOverride: provider })
+    orch.setVoiceCall(true)
+    await orch.handleDispatch('sei:chat_received', { ...chat('night sui'), voice: true })
+    const md = await fs.readFile(config.memory.memory_md_path, 'utf8')
+    expect(md).toContain('Plan for next time: ask how the interview went')
+    expect(md).not.toContain('in Minecraft: ask how')
+    expect(onCallEndRequested).toHaveBeenCalledWith({ nextStepHook: true, nextStepLine: null, nextStepGame: null })
+  })
+
+  it('a plan the host says is not for this game is greeted as talk', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const config = makeConfig()
+    await fs.writeFile(config.memory.memory_md_path, '# Memory\n\n- [2026-10-07 21:00] Plan for next time: ask how the interview went\n')
+    config._seiNextStepPlan = 'ask how the interview went'
+    config._seiNextStepPlanNotForGame = true
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:idle', { reason: 'just_connected_first_spawn', quietMs: 0 })
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('to pick up next time: \\"ask how the interview went\\"')
+    expect(turn).toContain('not saved as something to do in Minecraft')
+  })
+
+  it('the first-spawn greeting is told about a saved plan', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    // 261011: the plan hint rides the returning-player greeting, which needs a
+    // memory entry (a first-ever session has no plan to bring up).
+    const config = makeConfig()
+    await fs.writeFile(config.memory.memory_md_path, '# Memory\n\n- [2026-10-07 21:00] Plan for next time: find a village for beds\n')
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:idle', { reason: 'just_connected_first_spawn', quietMs: 0 })
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('Plan for next time')
+  })
+
+  it('261014: an open plan from the host is named in the first-spawn greeting', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const config = makeConfig()
+    await fs.writeFile(config.memory.memory_md_path, '# Memory\n\n- [2026-10-07 21:00] Plan for next time: find a village for beds\n')
+    config._seiNextStepPlan = 'find a village for beds'
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:idle', { reason: 'just_connected_first_spawn', quietMs: 0 })
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('to pick up next time: \\"find a village for beds\\"')
+    expect(turn).not.toContain('This is only a hint')
+  })
+
+  it('261014: no open plan (host says null) drops the plan hint from the greeting', async () => {
+    _setTickIntervalForTests(10_000_000)
+    const { adapter } = makeAdapter()
+    const provider = makeProvider([{ text: '', toolUses: [] }])
+    const config = makeConfig()
+    await fs.writeFile(config.memory.memory_md_path, '# Memory\n\n- [2026-10-07 21:00] Plan for next time: find a village for beds\n')
+    config._seiNextStepPlan = null
+    const orch = createOrchestrator({ adapter, config, reenqueue: () => {}, _anthropicOverride: provider })
+    await orch.handleDispatch('sei:idle', { reason: 'just_connected_first_spawn', quietMs: 0 })
+    const turn = JSON.stringify(provider.calls[0].messages ?? provider.calls[0])
+    expect(turn).toContain('FIRST CONTACT')
+    expect(turn).not.toContain('you can bring it up if it fits')
+    expect(turn).not.toContain('to pick up next time')
+  })
+})

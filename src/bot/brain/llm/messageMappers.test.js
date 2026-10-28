@@ -1,0 +1,312 @@
+import { describe, it, expect } from 'vitest'
+import {
+  flattenSystemBlocks,
+  anthropicToOllamaMessages,
+  anthropicToOpenAIMessages,
+  anthropicToolsToOpenAITools,
+  openAIResponseToAnthropic,
+  anthropicToolsToGeminiTools,
+  anthropicToGeminiContents,
+  geminiResponseToAnthropic,
+} from './messageMappers.js'
+
+describe('flattenSystemBlocks', () => {
+  it('joins text blocks with blank line', () => {
+    expect(flattenSystemBlocks([
+      { type: 'text', text: 'A' },
+      { type: 'text', text: 'B' },
+    ])).toBe('A\n\nB')
+  })
+  it('returns empty string for non-array', () => {
+    expect(flattenSystemBlocks(undefined)).toBe('')
+  })
+})
+
+describe('anthropicToOpenAIMessages', () => {
+  it('prepends system, coalesces user text blocks, splits tool_result into tool messages', () => {
+    const out = anthropicToOpenAIMessages([
+      { role: 'user', content: [
+        { type: 'text', text: 'hello' },
+        { type: 'text', text: 'world' },
+      ]},
+      { role: 'assistant', content: [
+        { type: 'text', text: 'hi' },
+        { type: 'tool_use', id: 'call_1', name: 'go', input: { x: 1 } },
+      ]},
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'call_1', content: 'ok' },
+        { type: 'text', text: 'next' },
+      ]},
+    ], 'SYSTEM')
+    expect(out[0]).toEqual({ role: 'system', content: 'SYSTEM' })
+    expect(out[1]).toEqual({ role: 'user', content: 'hello\n\nworld' })
+    expect(out[2].role).toBe('assistant')
+    expect(out[2].content).toBe('hi')
+    expect(out[2].tool_calls).toEqual([{
+      id: 'call_1', type: 'function',
+      function: { name: 'go', arguments: JSON.stringify({ x: 1 }) },
+    }])
+    expect(out[3]).toEqual({ role: 'tool', tool_call_id: 'call_1', content: 'ok' })
+    expect(out[4]).toEqual({ role: 'user', content: 'next' })
+  })
+})
+
+describe('anthropicToolsToOpenAITools', () => {
+  it('wraps each as function', () => {
+    expect(anthropicToolsToOpenAITools([
+      { name: 'go', description: 'move', input_schema: { type: 'object', properties: { x: { type: 'number' } } } },
+    ])).toEqual([{
+      type: 'function',
+      function: { name: 'go', description: 'move', parameters: { type: 'object', properties: { x: { type: 'number' } } } },
+    }])
+  })
+  it('returns undefined for empty', () => {
+    expect(anthropicToolsToOpenAITools([])).toBeUndefined()
+  })
+})
+
+describe('openAIResponseToAnthropic', () => {
+  it('parses text + tool_calls', () => {
+    const out = openAIResponseToAnthropic({
+      choices: [{
+        message: {
+          content: 'hi',
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'go', arguments: '{"x":1}' } }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+      usage: { total_tokens: 10 },
+    })
+    expect(out.text).toBe('hi')
+    expect(out.toolUses).toEqual([{ id: 'c1', name: 'go', input: { x: 1 } }])
+    expect(out.stopReason).toBe('tool_calls')
+    expect(out.usage).toEqual({ total_tokens: 10 })
+  })
+  it('synthesizes toolu_ id when missing', () => {
+    const out = openAIResponseToAnthropic({
+      choices: [{ message: { tool_calls: [{ type: 'function', function: { name: 'go', arguments: '{}' } }] } }],
+    })
+    expect(out.toolUses[0].id).toMatch(/^toolu_/)
+  })
+  it('stashes raw arguments on parse failure', () => {
+    const out = openAIResponseToAnthropic({
+      choices: [{ message: { tool_calls: [{ id: 'c1', type: 'function', function: { name: 'go', arguments: '{broken' } }] } }],
+    })
+    expect(out.toolUses[0].input).toEqual({ _raw: '{broken' })
+  })
+})
+
+describe('Gemini mappers', () => {
+  it('wraps tools in functionDeclarations and strips additionalProperties', () => {
+    const out = anthropicToolsToGeminiTools([{
+      name: 'go',
+      description: 'move',
+      input_schema: { type: 'object', properties: { x: { type: 'number' } }, additionalProperties: false, $schema: 'foo' },
+    }])
+    expect(out).toEqual([{
+      functionDeclarations: [{
+        name: 'go',
+        description: 'move',
+        parameters: { type: 'object', properties: { x: { type: 'number' } } },
+      }],
+    }])
+  })
+
+  it('maps assistant tool_use → functionCall and user tool_result → functionResponse', () => {
+    const out = anthropicToGeminiContents([
+      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'go', input: { x: 1 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+    ])
+    expect(out[0]).toEqual({ role: 'user', parts: [{ text: 'hi' }] })
+    expect(out[1]).toEqual({ role: 'model', parts: [{ functionCall: { name: 'go', args: { x: 1 } } }] })
+    expect(out[2].role).toBe('user')
+    // functionResponse.name MUST be the original tool name ('go'), not the id.
+    // Gemini 400s if the name doesn't match a prior functionCall.
+    expect(out[2].parts[0].functionResponse.name).toBe('go')
+    expect(out[2].parts[0].functionResponse.response).toEqual({ result: 'ok' })
+  })
+
+  it('rejects deep schema fields Gemini does not accept (default, oneOf, $ref, definitions)', () => {
+    const out = anthropicToolsToGeminiTools([{
+      name: 'go',
+      description: 'move',
+      input_schema: {
+        $schema: 'http://json-schema.org/draft-07/schema#',
+        type: 'object',
+        properties: {
+          x: { type: 'number', default: 0 },
+          y: { oneOf: [{ type: 'number' }, { type: 'string' }] },
+        },
+        additionalProperties: false,
+        definitions: { foo: { type: 'object' } },
+      },
+    }])
+    const params = out[0].functionDeclarations[0].parameters
+    expect(params.$schema).toBeUndefined()
+    expect(params.additionalProperties).toBeUndefined()
+    expect(params.definitions).toBeUndefined()
+    expect(params.properties.x.default).toBeUndefined()
+    expect(params.properties.y.oneOf).toBeUndefined()
+    // Allowed fields preserved.
+    expect(params.type).toBe('object')
+    expect(params.properties.x.type).toBe('number')
+  })
+
+  it('parses Gemini response back to anthropic shape', () => {
+    const out = geminiResponseToAnthropic({
+      candidates: [{
+        content: { parts: [{ text: 'hello ' }, { functionCall: { name: 'go', args: { x: 1 } } }] },
+        finishReason: 'STOP',
+      }],
+      usageMetadata: { totalTokenCount: 10 },
+    })
+    expect(out.text).toBe('hello ')
+    expect(out.toolUses).toHaveLength(1)
+    expect(out.toolUses[0].name).toBe('go')
+    expect(out.toolUses[0].input).toEqual({ x: 1 })
+    expect(out.stopReason).toBe('STOP')
+  })
+})
+
+// ─── Image block translation (VIS-02) ──────────────────────────────────
+// The orchestrator appends a provider-neutral image block on a FRESH user
+// turn after an explicit `visualize`:
+//   { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:<b64> } }
+// Each non-Anthropic mapper must translate it to that provider's native shape,
+// and the block must NEVER land on a tool/function-result message (Pitfall 4).
+describe('image block translation (VIS-02)', () => {
+  const IMG = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } }
+
+  describe('OpenAI (anthropicToOpenAIMessages)', () => {
+    it('emits an ARRAY-form user message with an image_url data-URL when an image is present', () => {
+      const out = anthropicToOpenAIMessages([
+        { role: 'user', content: [
+          { type: 'text', text: 'rendered view attached' },
+          IMG,
+        ]},
+      ])
+      const userMsg = out.find(m => m.role === 'user')
+      expect(userMsg).toBeDefined()
+      // Image present -> content MUST be the array form, not a coalesced string.
+      expect(Array.isArray(userMsg.content)).toBe(true)
+      expect(userMsg.content).toEqual([
+        { type: 'text', text: 'rendered view attached' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA' } },
+      ])
+    })
+
+    it('keeps text-only user turns in the coalesced string form (no regression)', () => {
+      const out = anthropicToOpenAIMessages([
+        { role: 'user', content: [
+          { type: 'text', text: 'hello' },
+          { type: 'text', text: 'world' },
+        ]},
+      ])
+      const userMsg = out.find(m => m.role === 'user')
+      expect(userMsg.content).toBe('hello\n\nworld')
+    })
+
+    it('builds the data URL from the block media_type (png -> data:image/png)', () => {
+      const out = anthropicToOpenAIMessages([
+        { role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBB' } },
+        ]},
+      ])
+      const userMsg = out.find(m => m.role === 'user')
+      expect(userMsg.content).toEqual([
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,BBBB' } },
+      ])
+    })
+
+    it('never emits an image on a tool-result message (Pitfall 4)', () => {
+      // An image block placed on a user turn that ALSO carries a tool_result:
+      // the tool_result becomes its own {role:'tool'} message (text only),
+      // and the image rides the separate {role:'user'} message.
+      const out = anthropicToOpenAIMessages([
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'visualize', input: {} }] },
+        { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'call_1', content: 'rendered view attached' },
+        ]},
+        { role: 'user', content: [
+          { type: 'text', text: 'rendered view attached' },
+          IMG,
+        ]},
+      ])
+      const toolMsg = out.find(m => m.role === 'tool')
+      expect(toolMsg).toBeDefined()
+      // tool message content is a plain string — no image part anywhere on it.
+      expect(typeof toolMsg.content).toBe('string')
+      expect(JSON.stringify(toolMsg)).not.toContain('image_url')
+      // The image lives ONLY on the user message.
+      const userMsg = out.find(m => m.role === 'user' && Array.isArray(m.content))
+      expect(JSON.stringify(userMsg)).toContain('image_url')
+    })
+  })
+
+  describe('Gemini (anthropicToGeminiContents)', () => {
+    it('emits an inline_data part for an image block on a user turn', () => {
+      const out = anthropicToGeminiContents([
+        { role: 'user', content: [
+          { type: 'text', text: 'rendered view attached' },
+          IMG,
+        ]},
+      ])
+      const userMsg = out.find(m => m.role === 'user')
+      expect(userMsg).toBeDefined()
+      expect(userMsg.parts).toEqual([
+        { text: 'rendered view attached' },
+        { inline_data: { mime_type: 'image/jpeg', data: 'AAAA' } },
+      ])
+    })
+
+    it('never emits inline_data on a functionResponse part (Pitfall 4)', () => {
+      const out = anthropicToGeminiContents([
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'visualize', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'rendered view attached' }] },
+        { role: 'user', content: [IMG] },
+      ])
+      // The functionResponse turn carries NO inline_data.
+      const fnTurn = out.find(m => m.parts?.some(p => p.functionResponse))
+      expect(fnTurn).toBeDefined()
+      expect(JSON.stringify(fnTurn)).not.toContain('inline_data')
+      // The image rides the later user turn.
+      const imgTurn = out.find(m => m.parts?.some(p => p.inline_data))
+      expect(imgTurn).toBeDefined()
+      expect(imgTurn.parts[0].inline_data).toEqual({ mime_type: 'image/jpeg', data: 'AAAA' })
+    })
+  })
+
+  // 261010: Ollama's native /api/chat is NOT the OpenAI shape. The array
+  // content form above is a 400 there ("cannot unmarshal array into ...
+  // content of type string"), which is why every Ollama image call failed.
+  describe('Ollama (anthropicToOllamaMessages)', () => {
+    it('puts the image in `images` as bare base64 on a string-content user message', () => {
+      const out = anthropicToOllamaMessages([
+        { role: 'user', content: [{ type: 'text', text: 'what do you see?' }, IMG] },
+      ], 'sys')
+      expect(out).toEqual([
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'what do you see?', images: ['AAAA'] },
+      ])
+      expect(JSON.stringify(out)).not.toContain('image_url')
+    })
+
+    it('strips a data: URL prefix', () => {
+      const out = anthropicToOllamaMessages([
+        { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'data:image/png;base64,BBBB' } }] },
+      ], '')
+      expect(out).toEqual([{ role: 'user', content: '', images: ['BBBB'] }])
+    })
+
+    it('tool calls carry OBJECT arguments; results are role:tool with tool_name and no image', () => {
+      const out = anthropicToOllamaMessages([
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'look', input: { yaw: 90 } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }, IMG] },
+      ], '')
+      expect(out[0]).toEqual({ role: 'assistant', content: '', tool_calls: [{ function: { name: 'look', arguments: { yaw: 90 } } }] })
+      expect(out[1]).toEqual({ role: 'tool', content: 'ok', tool_name: 'look' })
+      expect(out[2]).toEqual({ role: 'user', content: '', images: ['AAAA'] })
+    })
+  })
+})

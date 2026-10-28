@@ -1,0 +1,2498 @@
+/**
+ * Bot utilityProcess supervisor.
+ *
+ * Sources:
+ *   - RESEARCH §Pattern 1 (full utilityProcess.fork + MessageChannelMain pattern)
+ *   - PATTERNS §src/main/botSupervisor.ts
+ *   - CONTEXT D-15, D-16, D-18, D-19, D-25
+ *   - Pitfall 1 (asar path), Pitfall 2 (stdio:'pipe')
+ *   - Project Constraint §5 (30s summon timeout, 10s stop timeout)
+ *
+ * Lifecycle: the supervisor owns a MAP of concurrent bot sessions keyed by
+ * characterId (multi-summon). A summon adds a session without disturbing the
+ * others; stop(id) drains one (10s budget) and stop()/shutdown() drains all.
+ * Two sessions may never share an in-game username (the world kicks the second
+ * with `name_taken`), so summon refuses a colliding name before forking.
+ */
+import {
+  utilityProcess,
+  MessageChannelMain,
+  app,
+  type UtilityProcess,
+} from 'electron';
+import path from 'node:path';
+import {
+  isForgeFamilyLanHost,
+  forgeHostBlock,
+  forgeHostBlockedMessage,
+  FORGE_HOST_BLOCKED,
+  type BotStatus,
+  type LogBatch,
+  type BotLifecycle,
+  type ErrorClass,
+  type CreditsHardStopEvent,
+  type VisionCapability,
+  type LanHost,
+  type SessionEndReason,
+  type StopReason,
+} from '../shared/ipc';
+import { effectiveMcUsername, type Character } from '../shared/characterSchema';
+import type { CreditWallContext } from './creditWall';
+import { isGameId, type GameId } from '../shared/gameIpc';
+import { getGameModule, type GameModule } from './games';
+import { clampChatLanguage } from '../shared/chatLanguage';
+import { buildLlmInitSection, type LlmInitSection } from './llmInitSection';
+import { chatgptSession } from './chatgptPlan';
+import {
+  answerChatgptTokenRequest,
+  ChatgptSummonError,
+  chatgptBotInitSection,
+  pushChatgptTokens,
+} from './chatgptPlan/botBridge';
+import { resolveChatgptModel } from './llm';
+import { checkOllamaForGame } from './llm/ollamaCapabilities';
+import { OLLAMA_DEFAULT_BASE_URL } from './llm/ollama';
+import { resolveWebSearchSettings } from './llm/webSearchSettings';
+import { getCharacter, patchCharacter } from './characterStore';
+import { loadApiKey, hasApiKey, getAiBackendKind, type AiBackendKind } from './apiKeyStore';
+import { buildLaunchContinuity } from './chat/continuity';
+import { readKnowledgeForPrompt } from './knowledge/knowledgeStore';
+import { readPendingPlanFor } from './homeNextStep';
+import { loadConfig as loadUserConfig } from './configStore'; // UserConfig for bot init
+import { paths } from './paths';
+import { createLogRouter, type LogRouter } from './logRouter';
+import { bootPhaseProps, type SummonFailureInfo, type SummonPhase } from './diagnostics';
+import { goodbyeGame, noteCompanionGoodbye } from './sessionGoodbye';
+
+/**
+ * The READY budget: from the bot reporting "booted" (its init-ack) to
+ * summon-ready. 260926: this clock used to start at fork, so the child's cold
+ * boot came out of it. On Windows that boot measured 21-24s (module load plus
+ * Defender scanning the unpacked files), which left the join 5s at best and
+ * made BOT_START_TIMEOUT the top summon failure (14 people in 30 days). The
+ * boot now has its own budget below and this one starts when it ends.
+ */
+const SUMMON_TIMEOUT_MS = 30_000;
+/**
+ * The cold-boot budget: fork to init-ack (process start, the bot's module
+ * graph, the game runtime import, config parse). Generous on purpose: a slow
+ * machine that is still booting is shown "Starting companion..." instead of a
+ * failure. Only a boot that never finishes trips it.
+ *
+ * 261007: 60s -> 90s. Healthy cold Windows summons on 0.6.5+ measured
+ * runtime_loaded at 39.5s and 46.8s (spawn 50.8s / 56.7s), so 60s left about
+ * 13s of slack, and one 0.6.7 Windows boot ran out of it inside the runtime
+ * import (pack_loader_ready at 21.6s, still loading at 60s); that install's
+ * next summon booted in 21s. A boot that is slow but finishing should be
+ * shown "Starting companion...", not failed.
+ */
+const BOOT_TIMEOUT_MS = 90_000;
+const STOP_TIMEOUT_MS = 10_000;
+/**
+ * 260926: app quit. The per-bot drain gets this long before the kill
+ * escalation, and the whole supervisor shutdown is hard-capped at
+ * SHUTDOWN_HARD_CAP_MS: anything still alive then is killed outright. Quit
+ * used to wait out a pending summon (up to 90s) plus a 10s drain.
+ */
+const SHUTDOWN_DRAIN_MS = 2_000;
+const SHUTDOWN_HARD_CAP_MS = 4_000;
+/**
+ * 260926: how long a stop waits for a cancelled pending summon to settle. After
+ * the fork the cancel settles it at once; before the fork it is bounded by the
+ * attempt's pre-fork awaits (store reads, the credit gate).
+ */
+const CANCEL_SETTLE_MS = 3_000;
+
+/**
+ * 260926: the rejection of a summon that a stop cancelled. A user action, not
+ * a failure: no error status, no diagnostic, no "couldn't join" line.
+ */
+export const SUMMON_CANCELLED = 'SUMMON_CANCELLED';
+export function isSummonCancelled(err: unknown): boolean {
+  return errText(err).startsWith(SUMMON_CANCELLED);
+}
+function summonCancelledError(): Error {
+  const e = new Error(`${SUMMON_CANCELLED}: stopped before the companion finished joining.`);
+  (e as Error & { code?: string }).code = SUMMON_CANCELLED;
+  return e;
+}
+
+/** Per-attempt cancel handle, owned by summon() and armed by _summon. */
+interface SummonControl {
+  cancelled: boolean;
+  /** Set once the child is forked: kill it and reject the summon now. */
+  cancel?: () => void;
+}
+
+/**
+ * 260810: module-level "is this character summoned right now" probe.
+ *
+ * Consumer: the chat-side MEMORY.md compactor (src/main/chat/memoryCompaction.ts).
+ * It must never compact while the character's bot process is live, because the
+ * forked bot runs its OWN compactor over the same MEMORY.md and the file lock
+ * that serializes writers (src/bot/brain/storage/fileLock.js) is in-process
+ * only — two processes compacting the same file at once could lose an entry.
+ *
+ * index.ts holds the supervisor instance in a closure, so the probe registers
+ * here (createBotSupervisor assigns it) instead of threading a callback through
+ * every consumer's deps. Before any supervisor exists it answers false, which
+ * is correct: no supervisor, no bot process.
+ */
+let summonProbe: ((characterId: string) => boolean) | null = null;
+export function isCharacterSummoned(characterId: string): boolean {
+  return summonProbe?.(characterId) ?? false;
+}
+
+/**
+ * 260801: the deadline this watchdog will enforce, shipped to the child in the
+ * init payload so its own connect guard can report a SPECIFIC failure before
+ * this generic one fires.
+ *
+ * Why it has to be sent rather than assumed: connect.js arms its 20s guard at
+ * `createBot`, but this timer is armed at `fork`. The comment there long
+ * claimed ~10s of margin; the real margin is 10s minus process boot minus the
+ * status ping (up to 5s). On a cold packaged Windows start, where boot pays
+ * module load plus a Defender scan of the asar-unpacked node_modules, boot
+ * alone can eat it, so the child's guard NEVER wins and every stalled join is
+ * reported as a bare `ready_timeout` with no cause. Measured live on 260801:
+ * a user whose world was open and answering status pings was told "make sure
+ * your LAN world is still open", which was the one thing already known to be
+ * fine.
+ *
+ * An absolute epoch timestamp is exact here (parent and child are the same
+ * machine and clock) and, unlike a duplicated budget constant in the bot,
+ * cannot drift out of step with SUMMON_TIMEOUT_MS.
+ */
+//
+// 260926: the ready watchdog now starts at init-ack, so the bot computes its
+// deadline itself from `readyBudgetMs` (shipped in init) at the moment it
+// sends init-ack. summonDeadlineAt stays in the payload as the worst case
+// (boot budget + ready budget from fork) for any reader that lacks the budget.
+const summonDeadlineFrom = (startedAtMs: number): number =>
+  startedAtMs + BOOT_TIMEOUT_MS + SUMMON_TIMEOUT_MS;
+
+/**
+ * Phase 13-15 (PROXY-07, D-40 sub-delivery a): Fly.io proxy base URL.
+ * Read from env so dev/staging/prod can swap targets without a rebuild.
+ * The default points at api.sei.gg — the Cloudflare-fronted edge for the
+ * production Fly.io deployment (see proxy/fly.toml). Cloudflare injects the
+ * origin-lock header so the raw Fly hostname rejects non-Cloudflare traffic.
+ */
+const PROXY_BASE_URL = process.env.SEI_PROXY_URL ?? 'https://api.sei.gg';
+
+/**
+ * Best-effort classification of an arbitrary child / dependency error into
+ * an ErrorClass. Used at three failure sites in `_summon` so the renderer
+ * always receives a structured `error` field on BotStatus (kind: 'error')
+ * — never a raw stack-trace fragment that would leak through ERROR_COPY.
+ *
+ * Heuristic table mirrors the renderer's classifyRendererError; if you
+ * tweak one, tweak the other (or hoist to shared/).
+ *
+ * NOTE (plan 04-09 manual smoke-test): the INVALID_API_KEY regex must
+ * cover the real Anthropic 401 wire format. After implementation the
+ * executor captured `sk-fake-key` errors and confirmed the regex below
+ * matches; if Anthropic changes their wire format and the smoke test
+ * regresses, extend this regex AND the renderer's classifyRendererError.
+ */
+/** 261017: the model the player picked for `provider` in Settings, if any. */
+function storedProviderModel(cfg: { provider_config?: unknown }, provider: string): string | undefined {
+  const pc = (cfg.provider_config as Record<string, unknown> | undefined)?.[provider];
+  const m = pc && typeof pc === 'object' ? (pc as { model?: unknown }).model : undefined;
+  return typeof m === 'string' && m.trim() ? m.trim() : undefined;
+}
+
+function classifyChildError(err: unknown): ErrorClass {
+  const msg = (err && typeof err === 'object' && 'message' in err)
+    ? String((err as { message: unknown }).message)
+    : String(err);
+  const lower = msg.toLowerCase();
+  if (/keychain|safestorage|encryption.*unavailable|decrypt/i.test(lower)) return 'KEYCHAIN_LOCKED';
+  if (/invalid.*api.*key|401|unauthorized|x-api-key|authentication_error/i.test(lower)) return 'INVALID_API_KEY';
+  if (/429|rate.?limit|throttl/i.test(lower)) return 'RATE_LIMITED';
+  if (/enotfound|enetunreach|getaddrinfo|fetch failed/i.test(lower)) return 'NETWORK_OFFLINE';
+  // Online-mode rejection (261007) BEFORE the LAN branch: the kick is
+  // "multiplayer.disconnect.unverified_username", which the LAN branch below
+  // would claim on "disconnect". Mirrors isOnlineModeRejection in connect.js.
+  if (/online_mode_rejected|unverified_username|failed to verify username/i.test(lower)) return 'ONLINE_MODE_REJECTED';
+  // Modded-host rejection BEFORE the LAN branch (260806): the kick text contains
+  // "kicked" and often "connect", so it used to be smeared into LAN_NOT_OPEN and
+  // the player was told to re-open a world that was open the whole time. Mirrors
+  // isModdedHostRejection in src/bot/adapter/minecraft/connect.js and
+  // classifyRendererError in the renderer.
+  if (/modded_host_rejected|\bfml\b|neoforge|\bforge\b|\bquilt\b/i.test(lower)) return 'MODDED_HOST_REJECTED';
+  if (lower.includes('fabric') && (lower.includes('mod') || lower.includes('require'))) return 'MODDED_HOST_REJECTED';
+  if (/\bmods?\b/i.test(lower) && /\brequires?\b|\binstall(ed)?\b/i.test(lower)) return 'MODDED_HOST_REJECTED';
+  // LAN_NOT_OPEN requires actual connection-loss evidence: refused/reset
+  // sockets, a kick, or the LAN watcher's own vocabulary. The old pattern had
+  // a bare /lan/ that matched incidental substrings ("userland" in a node
+  // deprecation warning), smearing message-less crashes into LAN_NOT_OPEN —
+  // hence the word boundary (260720).
+  if (/econnrefused|econnreset|connection reset|socket closed|kicked|could not reach|no minecraft lan|\blan\b/i.test(lower)) return 'LAN_NOT_OPEN';
+  if (/eaddrnotavail|multicast/i.test(lower)) return 'LAN_UNAVAILABLE';
+  if (/timeout|did not signal ready/i.test(lower)) return 'BOT_START_TIMEOUT';
+  return 'BOT_CRASH';
+}
+
+/**
+ * Node's own chatter, which every bot process emits whether or not anything is
+ * wrong. Dropping it is what lets "the child said nothing" mean something.
+ *
+ * 260806: the mid-session crash path used `tails.stderr` verbatim to decide both
+ * the error class and the message. But EVERY bot stderr tail opens with the
+ * punycode DEP0040 pair, so "there was no output" was unreachable in production
+ * and a genuinely silent SIGKILL was described to the user with the same
+ * sentence as a real in-process stack trace. Worse for classification: that
+ * warning contains the word "userland", which is the exact substring the
+ * `\blan\b` word boundary in classifyChildError was added to defend against.
+ */
+const NODE_NOISE_PATTERNS: readonly RegExp[] = [
+  /^\(node:\d+\)\s*\[DEP\d+\]\s*DeprecationWarning:/i,
+  /^\(Use `.*` to show where the warning was created\)$/i,
+  /^\s*$/,
+];
+
+/**
+ * The part of a child's output that is actually evidence of something. Returns
+ * '' when the child produced nothing but Node's routine warnings, which is the
+ * signal that the process was killed from outside rather than crashing.
+ */
+export function meaningfulTail(raw: string): string {
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => !NODE_NOISE_PATTERNS.some((p) => p.test(line.trim())))
+    .join('\n')
+    .trim();
+}
+
+const logger = {
+  info: (m: string) => console.log(`[sei] ${m}`),
+  warn: (m: string) => console.warn(`[sei] ${m}`),
+  error: (m: string) => console.error(`[sei] ${m}`),
+};
+
+/** Best-effort error → message string (mirrors the inline pattern used below). */
+function errText(err: unknown): string {
+  return (err && typeof err === 'object' && 'message' in err)
+    ? String((err as { message: unknown }).message)
+    : String(err);
+}
+
+/**
+ * 260720 diagnostics: error-class string for the failed-summon diagnostic.
+ * Pre-gate refusals throw sentinel-token errors ('CLOUD_CREDITS_DEPLETED',
+ * 'DAILY_LIMIT_REACHED', 'SUMMON_USERNAME_CONFLICT: name', 'LOCAL_NO_API_KEY:
+ * ...', 'LAN_NOT_OPEN', 'PREFERRED_NAME_MISSING') — the leading UPPER_SNAKE
+ * token IS the class, and squeezing it through classifyChildError would smear
+ * most of them into BOT_CRASH. Anything else falls back to classifyChildError.
+ */
+function diagErrorClass(err: unknown): string {
+  const m = errText(err).match(/^([A-Z][A-Z0-9_]{2,})(?::|\s|$)/);
+  if (m) return m[1];
+  return classifyChildError(err);
+}
+
+function botEntryPath(): string {
+  // Pitfall 1: asar-internal path crashes utilityProcess.fork.
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'src/bot/index.js');
+  }
+  // In dev: __dirname for the bundled main is `<repo>/dist/main`. The bot
+  // lives at `<repo>/src/bot/index.js` and is NOT bundled into dist by
+  // electron-vite (electron.vite.config.ts only builds main, preload, and
+  // renderer). The previous resolution `path.join(__dirname, '../bot/...')`
+  // pointed at `dist/bot/index.js`, which never exists, so utilityProcess
+  // forked an entry that immediately failed to load and exited with
+  // code=1 — the regression captured in 260508-mun. Resolve up two
+  // levels and into src/bot/index.js so dev launches against the real
+  // source file.
+  return path.join(__dirname, '../../src/bot/index.js');
+}
+
+export interface BotSupervisorOptions {
+  /**
+   * Game adapters (M0, 260908): resolve the GameModule for a game id. Defaults
+   * to the registry in ./games. When NO module is registered for 'minecraft'
+   * (older wiring, tests), a legacy Minecraft module is synthesized from
+   * getLanPort/getLanMotd/getSkinServerBaseUrl below, so the pre-M0 option set
+   * keeps working unchanged.
+   */
+  getGameModule?: (game: GameId) => GameModule | null;
+  /**
+   * Game adapters: the downloaded game pack root for this game, shipped to the
+   * bot as `packRoot` (src/bot/packLoader.js). Optional; null until the
+   * game-pack branch wires it. */
+  /** Returns the cached LAN port if connected, null otherwise. Wired by main.
+   *  LEGACY: read only when no Minecraft GameModule is registered. */
+  getLanPort: () => number | null;
+  /**
+   * Returns the cached LAN world MOTD (level name) if connected, else null.
+   * Forwarded into the bot init payload as a human label for the world
+   * registry / MEMORY.md section headers (memory/worlds.js). Optional — when
+   * absent the bot labels worlds by spawn coords instead.
+   */
+  getLanMotd?: () => string | null;
+  /**
+   * 260929: the detected host client of the open LAN world (lanWatcher). A
+   * Minecraft summon that times out on a modded host is reported as
+   * MODDED_HOST_REJECTED instead of a generic BOT_START_TIMEOUT. Optional.
+   */
+  getLanHost?: () => LanHost | undefined;
+  /** Forward to renderer via webContents.send('bot:status', status). */
+  sendStatus: (status: BotStatus) => void;
+  /**
+   * Phase 15 (D-10/VIS-03): forward the bot's `vision-capability` port message
+   * to the renderer via webContents.send('vision:capability', cap). The bot
+   * emits it on summon-ready and on each backend switch; the renderer holds it
+   * in useUiStore.visionCapable so the Settings auto-render toggle (15-05) can
+   * disable itself for a non-VLM provider. Optional — undefined no-ops.
+   */
+  sendVisionCapability?: (cap: VisionCapability) => void;
+  /**
+   * The live game bot authored a chat message (a reply to a message routed in
+   * from the in-app chat while it is in-game). Main persists it to the chat
+   * transcript and pushes it to the renderer. Optional — undefined no-ops.
+   */
+  onBotChat?: (characterId: string, text: string) => void;
+  /**
+   * Party redesign §2/§5: the live game bot dispatched a world-acting tool
+   * (`name` set) or drained back to idle (`name` null). Main forwards this to
+   * the renderer over `bot:action` so the presence line can show a verb
+   * ("gathering wood…"). The supervisor also calls this with `name: null` when
+   * a session stops/exits, so a stale verb never lingers after the bot is gone.
+   * Optional — undefined no-ops.
+   */
+  onBotAction?: (
+    characterId: string,
+    name: string | null,
+    args: Record<string, unknown> | undefined,
+    ts: number,
+  ) => void;
+  /**
+   * Minecraft dashboard (260721): the live bot posted a telemetry snapshot
+   * ({type:'dashboard'} port message, ~every 2s while the renderer watches).
+   * The payload is forwarded RAW; the consumer (mcDashboardService) validates
+   * before it crosses to the renderer. Optional — undefined no-ops.
+   */
+  onDashboard?: (characterId: string, snapshot: unknown) => void;
+  /**
+   * 261011: cumulative per-action outcome counters from the live Minecraft bot
+   * ({type:'action-stats'} port message, every ~15s while changing plus once
+   * before any terminal lifecycle). Forwarded RAW; mcActionTelemetry.ts
+   * validates. Optional — undefined no-ops.
+   */
+  onActionStats?: (characterId: string, stats: unknown) => void;
+  /**
+   * 261011: the session's recent conversation ({type:'session-digest'} port
+   * message, every ~15s while changing plus once before any terminal
+   * lifecycle), for the player-end "next time" check. Forwarded RAW;
+   * playerEndNextStep.ts validates. Holds chat text: never logged, never
+   * sent to analytics. Optional; undefined no-ops.
+   */
+  onSessionDigest?: (characterId: string, digest: unknown) => void;
+  /** Forward to renderer via webContents.send('bot:log:batch', batch). Batched. */
+  sendLog: (batch: LogBatch) => void;
+  /**
+   * Returns the loopback skin server's baseUrl (e.g.
+   * 'http://127.0.0.1:54321') or null if the server failed to bind on boot.
+   * Closure-via-getter so a later restart of the skin server (port-drift
+   * recovery) is observable by subsequent summons. The bot supervisor
+   * ships this into the bot init payload; the bot logs it for verification
+   * (CustomSkinLoader on the host's MC client is the real consumer).
+   */
+  getSkinServerBaseUrl: () => string | null;
+  /**
+   * Pre-flight cloud gate (260724). Resolves `true` when the signed-in account
+   * is on the cloud-proxy backend AND is OVER LIMIT: its weekly allowance is
+   * spent and no extra credits remain (`CreditsStatus.over_limit`). `_summon`
+   * consults this BEFORE forking a cloud bot and refuses to summon when `true`,
+   * so a user whose next call would 402 never joins the world to idle. MUST
+   * fail-open (resolve `false`) on any error or missing session — a transient
+   * ledger-read blip can never wrongly block a paying user. BYOK summons skip
+   * the check. Wired in index.ts to proxyClient.cloudOverLimit.
+   */
+  cloudOverLimit: () => Promise<boolean>;
+  /**
+   * Fan the out-of-playtime hard-stop modal to the renderer (wired to
+   * emitCreditsHardStop). `_summon` calls this with reason='depleted' when the
+   * gate refuses a summon, so the user sees the upgrade / top up surface
+   * instead of a bot that joins and does nothing.
+   */
+  emitHardStop: (info: CreditsHardStopEvent, ctx?: CreditWallContext) => void;
+  /**
+   * Voice calls (260705): is a voice call currently open for this character?
+   * Read on summon-ready so a bot that spawns MID-call (the launch()-from-a-
+   * call handoff) immediately gets {type:'voice-call', active:true} — without
+   * this, its say() lines would land in in-game chat instead of the call.
+   * Wired to voice/callState.isCallActive; optional so tests can omit it.
+   */
+  isVoiceCallActive?: (characterId: string) => boolean;
+  /**
+   * Voice calls (260705): the in-game bot called end_call() — it wants the
+   * player's voice call hung up (it stays in the game). Main clears the call
+   * state and pushes voice:call-ended to the renderer, which drains the TTS
+   * queue (the farewell) before tearing the call down. Optional — no-ops.
+   */
+  onCallEndRequested?: (characterId: string) => void;
+  /**
+   * P0 failed-summon diagnostics (260720): invoked at most ONCE per summon
+   * attempt, at its terminal failure site — pre-gate refusal ('pre_gate'),
+   * child spawn error or exit-before-ready ('fork'), structured pre-ready
+   * lifecycle error ('connect'), the 30s watchdog ('ready_timeout') — plus
+   * once for a mid-session crash exit ('mid_session': nonzero code with no
+   * stop requested). The payload carries the RAW stderr/stdout tails and
+   * error message; the consumer (index.ts) redacts via
+   * diagnostics.buildSummonDiagnostic before anything leaves the machine.
+   * Optional — undefined no-ops; a throwing callback is swallowed.
+   */
+  onSummonFailure?: (info: SummonFailureInfo) => void;
+  /**
+   * 260926: a summon reached summon-ready. Carries the attempt's boot-phase
+   * breakdown (flat *_ms props from diagnostics.bootPhaseProps) so the
+   * success event can show where cold-boot time goes too, not only failures.
+   * Optional; a throwing callback is swallowed.
+   */
+  onSummonReady?: (characterId: string, bootProps: Record<string, number | string | null>) => void;
+}
+
+export interface BotSupervisor {
+  /** Fork a bot for this character into `game` (default 'minecraft'). */
+  summon(characterId: string, game?: GameId): Promise<void>;
+  /**
+   * Stop one summoned character, or — with no id — every active session.
+   * `reason` (260929, default 'user_stop') becomes the `endReason` on the
+   * terminal idle status, i.e. bot_session_ended.reason.
+   */
+  stop(characterId?: string, reason?: StopReason): Promise<void>;
+  /** First active character id (or null). Back-compat: callers that only ask
+   *  "is ANY bot running" still work. Prefer getActiveIds()/isActive(id). */
+  getActiveId(): string | null;
+  /** All currently-summoned character ids (multi-summon). */
+  getActiveIds(): string[];
+  /** True when this specific character has a live (or connecting) session. */
+  isActive(characterId: string): boolean;
+  /**
+   * Task 4 — route an in-app chat message into a live game session (shared
+   * brain + prompt cache). Returns false if no session is live (caller falls
+   * back to the standalone chat brain).
+   */
+  sendSeiChat(characterId: string, payload: { from: string; text: string; voice?: boolean }): boolean;
+  /**
+   * 260708: record-only mirror of a group-call line into a live session's chat
+   * history (context, no reply turn). Returns false if no session is live.
+   */
+  observeSeiChat(characterId: string, payload: { from: string; text: string }): boolean;
+  /** For app.before-quit cleanup. Drains ALL active sessions with the stop timeout. */
+  shutdown(): Promise<void>;
+  /**
+   * Plan 10-06: update the latest known JWT (Supabase access_token) for the
+   * utilityProcess channel. Stores the value module-locally so the next summon
+   * can include it in the init payload, and — if a session is active — posts a
+   * `{type:'jwt', jwt}` message to the active port1 immediately. `null` clears
+   * the cached value (used on SIGNED_OUT). Phase 13 is the consumer; in Phase
+   * 10 the utilityProcess ignores the inbound jwt message.
+   */
+  updateJwt(jwt: string | null): void;
+  /**
+   * WR-05 follow-up: apply a cloud ↔ local backend switch to the RUNNING bot
+   * immediately, without a stop+re-summon. No-op when no session is active —
+   * the next summon reads `ai_backend_kind` fresh from config.json. Never
+   * throws: backend-acquisition failures (missing key, no JWT) are surfaced
+   * as a BotStatus error and/or degrade to the cold-summon behavior. Call
+   * AFTER persisting the new kind via apiKeyStore.setAiBackendKind so the two
+   * sources of truth agree.
+   */
+  switchBackend(kind: AiBackendKind): Promise<void>;
+  /**
+   * Voice calls (260705): forward the call open/hang-up toggle into a live
+   * game session ({type:'voice-call', active} on port1). While active the
+   * bot's say() lines route up to the chat surface (→ TTS) instead of in-game
+   * chat, and each turn carries the voice-call primer. Returns true when a
+   * live session took the message; false (no-op) when the character has no
+   * session — the mode is also re-applied on summon-ready via
+   * opts.isVoiceCallActive, so calling this on an idle character is fine.
+   */
+  setVoiceCall(characterId: string, active: boolean): boolean;
+  /**
+   * Voice calls (260705): the renderer's call pipeline just went live — ask a
+   * live in-game session to greet the player first ({type:'voice-call-greet'}
+   * on port1). Returns false when the character has no live session (the
+   * caller runs the standalone chat-brain greeting instead).
+   */
+  greetVoiceCall(characterId: string): boolean;
+  /**
+   * Minecraft dashboard (260721): forward the renderer's visibility hint into
+   * a live session ({type:'dashboard-watch', active} on port1). While active
+   * the bot samples the minimap and emits telemetry snapshots; inactive stops
+   * the sampling. Returns false (no-op) when the character has no session.
+   */
+  setDashboardWatch(characterId: string, active: boolean): boolean;
+  /**
+   * 260725 play/pause: forward the in-app pause toggle into a live session
+   * ({type:'game-pause', paused} on port1). Runtime-only, never persisted.
+   * Returns false (no-op) when the character has no session.
+   */
+  setGamePaused(characterId: string, paused: boolean): boolean;
+  /**
+   * 260725 runtime game mode: forward reactive/proactive into a live session
+   * ({type:'game-mode', mode} on port1). Runtime-only, never persisted —
+   * every summon starts proactive. Returns false when there is no session.
+   */
+  setGameMode(characterId: string, mode: 'reactive' | 'proactive'): boolean;
+}
+
+interface ActiveSession {
+  characterId: string;
+  /** Game adapters (M0): which game this session was forked into. */
+  game: GameId;
+  /**
+   * Effective in-game username this bot connected under (the game module's
+   * effectiveUsername; Minecraft: effectiveMcUsername).
+   * Tracked so a second summon can refuse a name collision before forking — two
+   * bots sharing a username get the second kicked with `name_taken`.
+   */
+  username: string;
+  /**
+   * 260703 hard guard: which AI backend this session was forked under (updated
+   * live by _switchBackend). `updateJwt` and the reactive 401 refresh only push
+   * JWTs to 'cloud-proxy' sessions — a BYOK bot must NEVER receive the Supabase
+   * token, so a local session cannot silently authenticate against the paid
+   * proxy even if the bot-side cloudMode guard were to regress.
+   */
+  backendKind: AiBackendKind;
+  startedAtMs: number;
+  /**
+   * 260926: boot-phase stamps (epoch ms) pushed by the bot as
+   * {type:'boot-timing'} snapshots (src/bot/bootTiming.js). Folded into the
+   * summon diagnostics so a slow or stalled start shows WHERE it went.
+   */
+  bootMarks?: Record<string, number>;
+  child: UtilityProcess;
+  port1: Electron.MessagePortMain;
+  router: LogRouter;
+  exited: Promise<void>;
+  resolveExited: () => void;
+  /**
+   * BL-01 (Phase 13 REVIEW): teardown closure returned by setupJwtRotation,
+   * populated only when aiBackendKind === 'cloud-proxy'. _stopActive must
+   * call this BEFORE port1.close() so the rotation pump doesn't fire a tick
+   * into a closed port. undefined for BYOK sessions.
+   */
+  teardownJwtRotation?: () => void;
+  /**
+   * 261017 (issue #46): the ChatGPT-plan token push subscription
+   * (chatgptPlan/botBridge.ts pushChatgptTokens), set only while the session
+   * runs the 'chatgpt' provider. Torn down with the JWT pump.
+   */
+  teardownChatgptTokens?: () => void;
+  /** 261017: the local LLM provider kind this session runs (llmInit.provider). */
+  llmProvider?: string;
+  /**
+   * 260618: timestamp of the last reactive JWT-refresh request from this bot
+   * (it posts {type:'request-jwt'} on a 401 expired_jwt). Debounced so a burst
+   * of 401s triggers at most one refreshSession() call.
+   */
+  lastJwtReqAt?: number;
+  /**
+   * 260720 diagnostics: set by _stop before it posts {type:'stop'}, so the
+   * exit handler can tell a requested drain (clean stop / kill escalation)
+   * from a spontaneous mid-session crash — only the latter fires the
+   * mid_session onSummonFailure diagnostic.
+   */
+  stopRequested?: boolean;
+  /** 260929: why _stop was asked to drain this session (end-reason analytics). */
+  stopReason?: StopReason;
+  /**
+   * 260929: the bot's own summon-stopped reason. 'quit' = the companion
+   * called quit() and left on its own (no stop from main).
+   */
+  selfStopReason?: string;
+}
+
+export function createBotSupervisor(opts: BotSupervisorOptions): BotSupervisor {
+  // Multi-summon: zero-or-more concurrent sessions keyed by characterId. A
+  // fresh summon adds an entry; it no longer stops the others. The common case
+  // (one bot) is just a one-entry map, so single-summon behavior is unchanged.
+  const sessions = new Map<string, ActiveSession>();
+  // 260705 (issue #6): synchronous summon reservations. `_summon`'s
+  // sessions.has() guard alone spans ~10 awaits (including the network credit
+  // gate) between check and sessions.set, so two interleaved summons could
+  // both pass it and both fork — the second child's sessions.set overwrote the
+  // first's entry, the world kicked one with name_taken, its teardown deleted
+  // the entry, and the surviving child was left alive with NO map entry: an
+  // unstoppable orphan burning LLM spend until app quit. The reservation is
+  // taken before `_summon`'s first await and held until the attempt settles
+  // (the 30s watchdog guarantees it does), which overlaps sessions.set — so
+  // there is no instant where a character is neither reserved nor registered.
+  const pendingSummons = new Map<string, Promise<void>>();
+  // 260926: the cancel handle of each pending summon (same keys).
+  const summonControls = new Map<string, SummonControl>();
+  // Effective MC username of each pending (pre-registration) summon, so the
+  // duplicate-username guard can also see attempts that haven't reached
+  // sessions.set yet (two DIFFERENT characters sharing a username, summoned
+  // together, would otherwise both fork and one gets kicked `name_taken`).
+  const pendingUsernames = new Map<string, { username: string; game: GameId }>();
+  // Plan 10-06: latest known Supabase access_token (JWT). The jwtBridge
+  // module-level closure calls updateJwt() on every TOKEN_REFRESHED / SIGNED_IN
+  // / USER_UPDATED / SIGNED_OUT (T-10-06-01: only the JWT, never the refresh
+  // token). Stored even when no session is active so the next summon's init
+  // payload carries a fresh value.
+  let latestJwt: string | null = null;
+
+  // Game adapters (M0): the game each character was last summoned into, so
+  // every status this supervisor emits (connecting, online, error, idle) is
+  // stamped with it and the renderer / play row / analytics never guess.
+  const lastGame = new Map<string, GameId>();
+  const sendStatus = (status: BotStatus): void => {
+    opts.sendStatus({ ...status, game: lastGame.get(status.characterId) ?? 'minecraft' });
+  };
+
+  /**
+   * Resolve the GameModule for a summon. The registry (src/main/games) wins;
+   * with nothing registered for Minecraft, synthesize the pre-M0 behavior from
+   * the legacy option closures so older wiring and the existing tests hold.
+   */
+  const resolveGameModule = (game: GameId): GameModule | null => {
+    const fromOpts = opts.getGameModule?.(game) ?? null;
+    if (fromOpts) return fromOpts;
+    const registered = getGameModule(game);
+    if (registered) return registered;
+    if (game !== 'minecraft') return null;
+    return {
+      id: 'minecraft',
+      displayName: 'Minecraft',
+      effectiveUsername: (c) => effectiveMcUsername(c),
+      collides: (a, b) => a.toLowerCase() === b.toLowerCase(),
+      watcher: { start() {}, async checkNow() { return { game: 'minecraft', kind: 'closed' }; }, stop() {} },
+      getWorldState: () => {
+        const port = opts.getLanPort();
+        return port == null
+          ? { game: 'minecraft', kind: 'closed' }
+          : { game: 'minecraft', kind: 'open', port, motd: opts.getLanMotd?.() ?? '', lastSeenAt: Date.now() };
+      },
+      getJoinTarget: (ctx) => {
+        const port = opts.getLanPort();
+        if (port == null) return null;
+        return {
+          port,
+          motd: opts.getLanMotd?.() ?? null,
+          mc_username: (ctx.userConfig.mc_username ?? '').trim(),
+          skinServerBaseUrl: ctx.skinServerBaseUrl,
+        };
+      },
+      joinTargetMissingError: {
+        error: 'LAN_NOT_OPEN',
+        message: 'No LAN world detected. Open one to LAN in Minecraft.',
+      },
+    };
+  };
+
+  const lifecycleToStatus = (
+    e: BotLifecycle,
+    characterId: string,
+    startedAtMs: number,
+  ): BotStatus | null => {
+    switch (e.type) {
+      case 'connected':
+      case 'summon-ready':
+        return { kind: 'online', uptimeMs: Date.now() - startedAtMs, startedAtMs, characterId };
+      case 'disconnected':
+        // Map to a transitional state; renderer can keep the row visible
+        // but flip the dot back to amber until reconnect.
+        return { kind: 'connecting', characterId };
+      case 'error':
+        return {
+          kind: 'error',
+          error: e.error,
+          message: e.message,
+          characterId,
+          // 260929: why a live session ended, when the bot could tell.
+          ...(e.endReason ? { endReason: e.endReason } : {}),
+          ...(e.kickCode ? { kickCode: e.kickCode } : {}),
+        };
+      case 'exit':
+        // Exit is handled separately — supervisor flips to 'idle' when no
+        // active session remains (see _stopActive).
+        return null;
+      case 'init-ack':
+      case 'chat':
+      case 'summon-stopped':
+      default:
+        return null;
+    }
+  };
+
+  async function _stop(characterId: string, timeoutMs: number, reason: StopReason = 'user_stop'): Promise<void> {
+    // 260705 (issue #6): a stop landing in the pre-registration window (status
+    // already "Connecting…", sessions.set not reached) used to find no session,
+    // report success — and the bot joined anyway seconds later. Wait for the
+    // pending attempt to settle (bounded by the summon watchdog) and stop the
+    // session it registered; if it failed, there is genuinely nothing to stop.
+    //
+    // 260926: that wait was the whole summon budget (up to 90s on a slow
+    // boot). A stop now CANCELS the pending attempt: the child, if forked, is
+    // killed at once and the summon rejects with SUMMON_CANCELLED (silent).
+    const pending = pendingSummons.get(characterId);
+    if (pending) {
+      const ctl = summonControls.get(characterId);
+      if (ctl) {
+        ctl.cancelled = true;
+        ctl.cancel?.();
+      }
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        pending.catch(() => { /* failed or cancelled summon == nothing to stop */ }),
+        new Promise<void>((r) => { settleTimer = setTimeout(r, CANCEL_SETTLE_MS); }),
+      ]);
+      clearTimeout(settleTimer);
+    }
+    const session = sessions.get(characterId);
+    if (!session) {
+      // No live session — but the renderer may still be showing a stale entry
+      // for this id (e.g. a mid-session crash that already dropped the session
+      // without a terminal push). Emit `idle` so a "Disconnect" click always
+      // clears the widget instead of no-op'ing on an orphaned status.
+      sendStatus({ kind: 'idle', characterId, endReason: reason });
+      return;
+    }
+    // Diagnostics (260720): mark the drain as requested BEFORE anything can
+    // make the child exit, so the exit handler never mistakes this stop (or
+    // its kill escalation) for a mid-session crash.
+    // 260929: the FIRST stop's reason sticks (a user Stop followed by the
+    // quit-time drain is still a user stop).
+    if (session.stopRequested !== true) session.stopReason = reason;
+    session.stopRequested = true;
+    // BL-01: kill the JWT rotation pump BEFORE port1.close() so a pending
+    // tick (in the middle of a refreshSession await) cannot postMessage
+    // onto a disposed port. setupJwtRotation re-checks `running` between
+    // the await and the postMessage; the teardown closure flips that flag.
+    try { session.teardownJwtRotation?.(); } catch { /* best-effort */ }
+    try { session.teardownChatgptTokens?.(); } catch { /* best-effort */ }
+    session.teardownChatgptTokens = undefined;
+    try {
+      session.port1.postMessage({ type: 'stop' });
+    } catch {
+      // port may already be closed if child crashed
+    }
+
+    const exited = await Promise.race<boolean>([
+      session.exited.then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), timeoutMs)),
+    ]);
+    if (!exited) {
+      logger.warn(`bot stop timed out after ${timeoutMs}ms — escalating to kill`);
+      try {
+        session.child.kill();
+      } catch {
+        // best-effort
+      }
+      // Wait briefly for kill to settle (best-effort)
+      await Promise.race<void>([
+        session.exited,
+        new Promise<void>((r) => setTimeout(r, 1000)),
+      ]);
+    }
+    try {
+      await session.router.close();
+    } catch {
+      // best-effort
+    }
+    try {
+      session.port1.close();
+    } catch {
+      // best-effort
+    }
+    if (sessions.get(characterId) === session) sessions.delete(characterId);
+    // 260618: a companion left — refresh the survivors' rosters.
+    broadcastRoster();
+    sendStatus({ kind: 'idle', characterId, endReason: session.stopReason ?? reason });
+    // Party redesign §5: the session is gone — clear any lingering action verb
+    // so the roster line doesn't stick on "gathering wood…" after Disconnect.
+    opts.onBotAction?.(characterId, null, undefined, Date.now());
+  }
+
+  /** Drain every active session in parallel (sign-out / before-quit). */
+  async function _stopAll(timeoutMs: number, reason: StopReason = 'user_stop'): Promise<void> {
+    // Include pending (pre-registration) summons so an app shutdown mid-summon
+    // drains the child that attempt is about to register (_stop awaits the
+    // reservation) instead of leaving it to die with the parent process.
+    const ids = new Set([...sessions.keys(), ...pendingSummons.keys()]);
+    await Promise.all([...ids].map((id) => _stop(id, timeoutMs, reason)));
+  }
+
+  /**
+   * 260618 (multi-agent): tell every live bot which OTHER AI companions share
+   * the world right now. Each bot receives the list of the other sessions'
+   * in-game usernames (never its own). The bot uses it to (a) not wake on a
+   * message aimed only at a sibling, (b) see + coordinate with teammates in its
+   * snapshot, and (c) know it may direct a fellow companion. Re-broadcast on
+   * every summon/stop/exit so the roster tracks the live session set. A solo
+   * session just gets [] (no behavior change). Best-effort per port.
+   */
+  function broadcastRoster(): void {
+    for (const session of sessions.values()) {
+      // Game adapters (M0): only sessions in the SAME game share a world.
+      const companions = [...sessions.values()]
+        .filter((s) => s !== session && s.game === session.game)
+        .map((s) => s.username);
+      try {
+        session.port1.postMessage({ type: 'roster', companions });
+      } catch {
+        /* port closed during teardown; ignore */
+      }
+    }
+  }
+
+  /**
+   * 260618 (freeze fix): a cloud-proxy bot posts {type:'request-jwt'} when a
+   * call returns 401 expired_jwt. The proactive 30-min rotation pump can miss
+   * (machine asleep, a refresh tick that failed), leaving the bot hammering a
+   * dead token and frozen until stopped. Fetch a fresh token on demand
+   * (getProxyJwt refreshes when near/past expiry) and push it straight back on
+   * the same cloud-jwt-update channel the pump uses, so the bot's next call
+   * succeeds. Debounced per session. NEVER logs the token (T-13-14-01).
+   */
+  async function handleJwtRefreshRequest(characterId: string): Promise<void> {
+    const session = sessions.get(characterId);
+    if (!session) return;
+    // 260703 hard guard: only a cloud-proxy session may be handed a JWT. A
+    // BYOK bot never legitimately sends request-jwt; if one does, ignore it.
+    if (session.backendKind !== 'cloud-proxy') return;
+    const now = Date.now();
+    if (session.lastJwtReqAt && now - session.lastJwtReqAt < 8_000) return;
+    session.lastJwtReqAt = now;
+    try {
+      const { getProxyJwt } = await import('./auth/proxyJwtFetcher');
+      const jwt = await getProxyJwt();
+      latestJwt = jwt;
+      try {
+        session.port1.postMessage({ kind: 'cloud-jwt-update', jwt });
+        logger.info(`[sei/sup] pushed a fresh JWT to ${characterId} after a 401 recovery request`);
+      } catch {
+        /* port closed during teardown; ignore */
+      }
+    } catch (err) {
+      // PROXY_NO_SESSION (signed out) or PROXY_REFRESH_FAILED. Nothing to push;
+      // the signed-out case is owned by the renderer's auth / hard-stop flow.
+      logger.warn(
+        `[sei/sup] reactive JWT refresh for ${characterId} failed: ${(err as Error)?.message}`,
+      );
+    }
+  }
+
+  /**
+   * 260720 diagnostics: per-attempt once-only failure reporter. Owns the
+   * attempt clock and the fired-guard so exactly one onSummonFailure lands per
+   * attempt no matter how many failure paths race (timer vs exit vs lifecycle
+   * error). Lives past a SUCCESSFUL summon too: the exit handler reuses it for
+   * the mid_session crash diagnostic (the guard is still unfired then).
+   */
+  interface FailureReporter {
+    /** Set once the backend kind is read, so even pre-fork failures carry it. */
+    backend: AiBackendKind | null;
+    /**
+     * 260926: set at fork. `marks` is read live from the session at fire
+     * time, so a failure carries every phase the bot reached.
+     */
+    boot: { forkAtMs: number; marks: () => Record<string, number> | undefined } | null;
+    fire(partial: {
+      phase: SummonPhase;
+      errorClass: string;
+      errorMessage: string;
+      exitCode?: number | null;
+      stderrTail?: string;
+      stdoutTail?: string;
+      /** 260929: the class this failure was reported as before reclassification. */
+      reclassifiedFrom?: string;
+    }): void;
+  }
+
+  function createFailureReporter(characterId: string): FailureReporter {
+    const startedAtMs = Date.now();
+    let fired = false;
+    const reporter: FailureReporter = {
+      backend: null,
+      boot: null,
+      fire(partial) {
+        if (fired) return;
+        fired = true;
+        try {
+          opts.onSummonFailure?.({
+            characterId,
+            phase: partial.phase,
+            errorClass: partial.errorClass,
+            errorMessage: partial.errorMessage,
+            exitCode: partial.exitCode ?? null,
+            stderrTail: partial.stderrTail ?? '',
+            stdoutTail: partial.stdoutTail ?? '',
+            ...(partial.reclassifiedFrom ? { reclassifiedFrom: partial.reclassifiedFrom } : {}),
+            durationMs: Date.now() - startedAtMs,
+            backend: reporter.backend,
+            boot: reporter.boot
+              ? { attemptStartMs: startedAtMs, forkAtMs: reporter.boot.forkAtMs, marks: reporter.boot.marks() ?? {} }
+              : undefined,
+          });
+        } catch {
+          /* diagnostics must never break summon/exit handling */
+        }
+      },
+    };
+    return reporter;
+  }
+
+  async function _summon(
+    characterId: string,
+    reporter: FailureReporter,
+    game: GameId,
+    ctl: SummonControl = { cancelled: false },
+  ): Promise<void> {
+    // Multi-summon: do NOT stop the other bots. Re-summoning an already-running
+    // character is a no-op (the UI shows "unsummon" for live characters, so the
+    // only way here is a double-fire) — never fork a duplicate child for it.
+    if (sessions.has(characterId)) return;
+
+    // 261005: credit_wall_hit context for a wall the live session runs into.
+    const wallCtx = (): CreditWallContext => {
+      let inCall: boolean | undefined;
+      try {
+        inCall = opts.isVoiceCallActive ? opts.isVoiceCallActive(characterId) : undefined;
+      } catch {
+        inCall = undefined;
+      }
+      return { surface: 'game', trigger: 'session', game, ...(inCall !== undefined ? { inCall } : {}) };
+    };
+
+    const module = resolveGameModule(game);
+    if (!module) throw new Error(`GAME_NOT_INSTALLED: no game module registered for ${game}`);
+
+    const character: Character | null = await getCharacter(characterId);
+    if (!character) throw new Error(`Character not found: ${characterId}`);
+
+    // Duplicate in-game-name guard: two bots can't share a username (the world
+    // kicks the second with `name_taken`). Refuse to fork when a live session
+    // IN THE SAME GAME already uses this character's effective username. The
+    // renderer pre-checks and raises a popup on the common path; this is the
+    // authoritative backstop that closes the click-twice-fast race. The game
+    // module owns the naming rule and the collision test (Minecraft: compared
+    // case-insensitively to match MC's username handling).
+    const username = module.effectiveUsername(character);
+    // 260909: some games seat ONE companion per world (Don't Starve Together's
+    // helper runs a single body; a second offer replaced the first and, via a
+    // link-reset race, left a brainless survivor standing). Refuse a second
+    // character while any session in that game is live or pending. The
+    // launch panel pre-checks and names the occupant; this is the backstop.
+    if (module.maxBodies === 1) {
+      const occupied =
+        [...sessions.entries()].some(([id, s]) => id !== characterId && s.game === game) ||
+        [...pendingUsernames.entries()].some(([id, p]) => id !== characterId && p.game === game);
+      if (occupied) {
+        throw new Error(module.oneBodyError?.message ?? `DST_ONE_COMPANION: ${module.displayName} fits one companion at a time.`);
+      }
+    }
+    for (const s of sessions.values()) {
+      if (s.game === game && module.collides(s.username, username)) {
+        throw new Error(`SUMMON_USERNAME_CONFLICT: ${username}`);
+      }
+    }
+    // 260705 (issue #6): also refuse when a PENDING summon (pre-registration,
+    // not yet in `sessions`) holds this username. Check-then-set is safe here —
+    // no await between them, so two attempts serialize on the event loop.
+    for (const [otherId, other] of pendingUsernames) {
+      if (otherId !== characterId && other.game === game && module.collides(other.username, username)) {
+        throw new Error(`SUMMON_USERNAME_CONFLICT: ${username}`);
+      }
+    }
+    pendingUsernames.set(characterId, { username, game });
+
+    // Phase 13-15 (PROXY-07, D-57): branch on AI backend kind.
+    //   - 'cloud-proxy' → bot routes Anthropic traffic through the Fly.io
+    //     proxy with the user's Supabase JWT as Bearer auth. No local API
+    //     key needed; `cloudMode` is shipped in the init payload.
+    //   - 'local' (BYOK)  → legacy path; loadApiKey() from safeStorage.
+    // The kind read defaults to 'local' for existing users (apiKeyStore.ts).
+    const aiBackendKind = await getAiBackendKind();
+    reporter.backend = aiBackendKind; // diagnostics: stamp even on pre-fork failures
+    // Loaded before the backend branch (was after it) because the local
+    // branch's key guard needs userCfg.provider: ollama is keyless by design
+    // (260817, china-compat W10). Same-function load, just earlier.
+    const userCfg = await loadUserConfig();
+    let apiKey: string = '';
+    let cloudMode: { baseURL: string; authToken: string } | undefined;
+    if (aiBackendKind === 'cloud-proxy') {
+      // The bot needs a JWT at fork time. jwtBridge calls updateJwt() on
+      // every SIGNED_IN / TOKEN_REFRESHED, so latestJwt should be populated
+      // whenever the user has an active session. A null value means the
+      // user is signed out — the proxy will 401 and the renderer's
+      // hard-stop modal flow takes over. We still fork (don't block summon
+      // on JWT presence) because the 13-14 rotation pump can push a JWT
+      // mid-session via parentPort {type:'jwt'}.
+      cloudMode = { baseURL: PROXY_BASE_URL, authToken: latestJwt ?? '' };
+
+      // Pre-flight gate (260724). Refuse to fork a cloud bot when the account
+      // is over its weekly limit with no extra credits left: otherwise the bot
+      // joins the LAN world, every proxy call 402s, and the user stares at an
+      // idle, silent companion. Surface the hard stop instead and abort the
+      // summon so nothing joins. cloudOverLimit fails OPEN (false on any error /
+      // no session / BYOK), so this never blocks a funded or own-key user. The
+      // early throw runs BEFORE the 'connecting' status below, so the model row
+      // stays idle rather than flashing a connect.
+      //
+      // This is the ONLY summon-time refusal. The old minimum-balance heuristic
+      // and the persisted daily-dollar block are both gone: the server decides,
+      // and a call that starts with any allowance left is allowed to finish.
+      if (await opts.cloudOverLimit()) {
+        logger.warn(
+          '[sei/sup] summon blocked: weekly limit reached with no extra credits — raising popup, not forking the bot',
+        );
+        opts.emitHardStop({ reason: 'depleted' }, { surface: 'game', trigger: 'summon_gate', game });
+        sendStatus({ kind: 'idle', characterId });
+        throw new Error('CLOUD_CREDITS_DEPLETED');
+      }
+    } else {
+      // 260703 hard guard: local (BYOK) mode must NEVER fall back to the cloud
+      // JWT. A missing key fails HERE — visibly, before any fork — instead of
+      // surfacing as an opaque ENOENT-flavored BOT_CRASH (or worse, a summon
+      // that quietly rode the signed-in user's Supabase token through the
+      // paid proxy). INVALID_API_KEY is the closest ERROR_COPY class; the
+      // explicit message tells the user exactly which state they're in.
+      //
+      // 260817 (china-compat W10): ollama is the one KEYLESS local provider
+      // (plain local HTTP; the wizard saves no key for it, and both the main
+      // llm layer and the bot's ollama adapter take none). Skip the guard for
+      // it — the no-cloud-fallback property still holds, because llmInit
+      // below routes the fork to the ollama provider, never the proxy.
+      const localProvider = userCfg.provider ?? 'anthropic';
+      // 261017 (issue #46): the ChatGPT plan's credential is main's OAuth
+      // session, not api_key.bin; it is resolved into llmInit below.
+      if (localProvider !== 'ollama' && localProvider !== 'chatgpt') {
+        if (!(await hasApiKey())) {
+          const message =
+            'Local mode is on but no API key is saved. Add your API key in Settings, or switch to managed billing.';
+          sendStatus({ kind: 'error', error: 'INVALID_API_KEY', message, characterId });
+          throw new Error(`LOCAL_NO_API_KEY: ${message}`);
+        }
+        // GUI-05: loadApiKey can throw KEYCHAIN_UNAVAILABLE / decrypt errors when
+        // the user is locked out of their keychain. classify before forwarding so
+        // the renderer's CharacterPage shows ERROR_COPY[KEYCHAIN_LOCKED] copy
+        // (not the raw safeStorage stack frame).
+        try {
+          apiKey = await loadApiKey();
+        } catch (err) {
+          const ec = classifyChildError(err);
+          const message = (err && typeof err === 'object' && 'message' in err)
+            ? String((err as { message: unknown }).message)
+            : String(err);
+          sendStatus({ kind: 'error', error: ec, message, characterId });
+          throw err;
+        }
+      }
+    }
+
+    // UserConfig (loaded above) populates the bot's player_username /
+    // player_display_name from onboarding. mc_username is no longer collected
+    // in the GUI (260605) — it stays in the DB but may be empty, so the bot
+    // derives player recognition from preferred_name when it's absent.
+    // Onboarding is now gated on preferred_name ("Name"); refuse to fork
+    // without it.
+    const mc_username = (userCfg.mc_username ?? '').trim();
+    const preferred_name = (userCfg.preferred_name ?? '').trim();
+    // Bridge the user-facing Looking (vision) mode from UserConfig into the
+    // bot's config.vision at fork time. The renderer never talks to the bot
+    // ConfigSchema directly — main is the translator. The remaining vision
+    // knobs (cadence, image_quality, resolution_px cap)
+    // come from the bot config / orchestrator defaults.
+    const visionMode = userCfg.vision_mode ?? 'on-demand';
+    // Appearance & feel: bridge the "Realistic typing" toggle into the bot so
+    // in-game replies get the same reading/typing pacing as the in-app chat.
+    // Default ON (matches UserConfig.realistic_typing) when the field is absent.
+    const realisticTyping = userCfg.realistic_typing !== false;
+    // 260909: web search provider + key for the brain's search / visit tools
+    // (env override > UserConfig.web_search_* > keyless 'auto' chain).
+    const webSearch = resolveWebSearchSettings(userCfg);
+    // 260709: bridge the conversation language into the bot's # LANGUAGE
+    // directive. Fork-time like vision_mode — a Settings change applies at the
+    // next summon (the chat surface re-reads it per turn).
+    const chatLanguage = clampChatLanguage(userCfg.chat_language);
+    // 260816 (china-compat W2): bridge the Settings LLM provider picker into
+    // the bot. UserConfig.provider + provider_config were written by Settings
+    // and read by NOTHING until now — the init payload carried no llm config,
+    // so every bot session ran Anthropic regardless of the picker. Local
+    // (BYOK) only: cloud-proxy stays on the anthropic+cloudMode path (llmInit
+    // stays undefined). The builder is SHARED with _switchBackend's local
+    // branch (260828) so a mid-session cloud→local switch carries the same
+    // provider/model/base_url the next summon would — see
+    // src/main/llmInitSection.ts for the field semantics.
+    let llmInit: LlmInitSection | undefined;
+    if (aiBackendKind === 'local') {
+      llmInit = buildLlmInitSection(userCfg, apiKey);
+      if (llmInit.provider === 'chatgpt') {
+        // 261017 (issue #46): ChatGPT plan. A fresh ACCESS token from main's
+        // session (the refresh token never leaves main) plus the account
+        // catalog's model. A paused plan, a dead sign-in or plan use turned
+        // off refuses here, before the fork, with the matching error class.
+        try {
+          llmInit = await chatgptBotInitSection(chatgptSession(), async () => {
+            // Only a model the player PICKED is passed; otherwise the
+            // account catalog's default (buildLlmInitSection would have
+            // filled the static fallback).
+            const r = await resolveChatgptModel(storedProviderModel(userCfg, 'chatgpt'));
+            return { model: r.model, reasoningEffort: r.reasoningEffort, vision: r.vision === 'yes' };
+          });
+        } catch (err) {
+          const code = err instanceof ChatgptSummonError ? err.code : 'NETWORK_OFFLINE';
+          const message = err instanceof Error ? err.message : String(err);
+          logger.warn(`[sei/sup] summon blocked: ${code}: ${message}`);
+          if (
+            code === 'CHATGPT_USAGE_LIMIT' ||
+            code === 'CHATGPT_NOT_ELIGIBLE' ||
+            code === 'CHATGPT_FORBIDDEN' ||
+            code === 'CHATGPT_AUTH_REJECTED' ||
+            code === 'CHATGPT_REQUEST_REJECTED'
+          ) {
+            chatgptSession().reportError(err instanceof ChatgptSummonError ? { code } : err);
+          }
+          sendStatus({ kind: 'error', error: code as ErrorClass, message, characterId });
+          throw new Error(`${code}: ${message}`);
+        }
+      }
+    }
+    if (!preferred_name) {
+      // 260828: this used to send error: 'BOT_CRASH' while throwing the
+      // PREFERRED_NAME_MISSING token — the renderer then showed "Sei stopped
+      // unexpectedly. Press Summon to restart.", inviting the retry loop
+      // production analytics caught (56 identical pre-gate failures in 13
+      // minutes). Send the real class so ERROR_COPY narrates the actual fix.
+      const status: BotStatus = {
+        kind: 'error',
+        error: 'PREFERRED_NAME_MISSING',
+        message: 'Your name is missing. Re-run onboarding from Settings.',
+        characterId,
+      };
+      sendStatus(status);
+      throw new Error('PREFERRED_NAME_MISSING');
+    }
+
+    // 261010: a local Ollama model must be able to run the game brain before
+    // the bot joins. Ollama not running, a model never pulled, or a model with
+    // no tool support (gemma3, llava, qwen2.5vl, ...) used to join the world
+    // and then stand there mute for the whole session. Fails open when Ollama's
+    // answer is unclear (checkOllamaForGame).
+    if (llmInit?.provider === 'ollama') {
+      const problem = await checkOllamaForGame(
+        llmInit.base_url ?? OLLAMA_DEFAULT_BASE_URL,
+        llmInit.model ?? '',
+      );
+      if (problem) {
+        logger.warn(`[sei/sup] summon blocked: ${problem.error}: ${problem.message}`);
+        sendStatus({ kind: 'error', error: problem.error, message: problem.message, characterId });
+        throw new Error(`${problem.error}: ${problem.message}`);
+      }
+    }
+
+    // Game adapters (M0): the game module says what the bot needs to join
+    // (Minecraft: the cached LAN port + MOTD; null = nothing to join). The
+    // missing-target error is the module's (Minecraft: LAN_NOT_OPEN, unchanged).
+    let joinTarget = module.getJoinTarget({
+      userConfig: userCfg,
+      skinServerBaseUrl: opts.getSkinServerBaseUrl(),
+    });
+    if (joinTarget == null) {
+      const status: BotStatus = {
+        kind: 'error',
+        error: module.joinTargetMissingError.error,
+        message: module.joinTargetMissingError.message,
+        characterId,
+      };
+      sendStatus(status);
+      throw new Error(module.joinTargetMissingError.error);
+    }
+    // 260929: Forge/NeoForge hard stop, before anything is downloaded or
+    // forked. The renderer's Summon button already refuses these hosts; this
+    // is the backstop for every other entry point (the voice-call launch
+    // honors, anything calling summon directly), using the SAME shared check
+    // (forgeHostBlock) so the paths cannot drift. The chat launch() tool
+    // refuses earlier with a model-facing note (chatService resolveLaunch).
+    // SEI_FORGE_HANDSHAKE=1 keeps the handshake spike testable.
+    if (game === 'minecraft' && process.env.SEI_FORGE_HANDSHAKE !== '1') {
+      let block: ReturnType<typeof forgeHostBlock> = null;
+      try { block = forgeHostBlock(opts.getLanHost?.()); } catch { block = null; }
+      if (block) {
+        const message = forgeHostBlockedMessage(block.loader);
+        sendStatus({ kind: 'error', error: FORGE_HOST_BLOCKED, message, characterId });
+        throw new Error(`${FORGE_HOST_BLOCKED}: ${message}`);
+      }
+    }
+    // Legacy init keys (one release): an older bot build reads the Minecraft
+    // join target off the top-level lanPort / lanMotd / skinServerBaseUrl.
+    const mcTarget = game === 'minecraft'
+      ? (joinTarget as { port: number; motd: string | null; skinServerBaseUrl: string | null })
+      : null;
+    const lanPort = mcTarget?.port ?? null;
+
+    // 260908 game packs: the adapter's runtime (mineflayer, minecraft-data,
+    // prismarine-viewer, gl, ...) is a download on first use, not part of the
+    // installer. Await it BEFORE startedAtMs is taken: a first-run download can
+    // run minutes, and summonDeadlineAt (shipped to the child below) is derived
+    // from that clock, so measuring from before the download would hand the
+    // bot a deadline already in the past. Dev resolves to the repo root
+    // instantly; a cached pack costs one installed.json read. Progress rides
+    // the game:pack-progress push, which is what the launch card shows.
+    opts.sendStatus({ kind: 'connecting', characterId, game, stage: 'starting' });
+    let packRoot: string;
+    try {
+      const { ensurePack } = await import('./games/packs');
+      packRoot = await ensurePack(game);
+    } catch (err) {
+      const detail = errText(err).replace(/^GAME_PACK_DOWNLOAD_FAILED:\s*/, '');
+      opts.sendStatus({
+        kind: 'error',
+        error: 'GAME_PACK_DOWNLOAD_FAILED',
+        message: `Could not download the ${game} support files: ${detail}`,
+        characterId,
+      });
+      throw new Error(`GAME_PACK_DOWNLOAD_FAILED: ${detail}`);
+    }
+
+    // 260921: the module's per-character step (Stardew: the companion's
+    // appearance, one LLM call on the first summon, stored afterwards). Here,
+    // ahead of startedAtMs, for the same reason as the pack: whatever it
+    // costs must not come out of the summon deadline. The module bounds its
+    // own wait; a failure only means the join target goes out without the
+    // extra fields.
+    if (module.prepareJoin) {
+      try {
+        const extra = await module.prepareJoin({ characterId, character });
+        if (extra) joinTarget = { ...(joinTarget as Record<string, unknown>), ...extra };
+      } catch (err) {
+        console.warn(`[sei/supervisor] ${game} prepareJoin failed (continuing): ${errText(err)}`);
+      }
+    }
+
+    const startedAtMs = Date.now();
+    // 260926: stage drives the launch button's progress label ("Starting
+    // companion..." until the bot has booted, then "Joining your world...").
+    sendStatus({ kind: 'connecting', characterId, stage: 'starting' });
+
+    const router = await createLogRouter({ characterId, sendBatch: opts.sendLog });
+    // 260926: a stop landed during the pre-fork awaits. Never fork.
+    if (ctl.cancelled) {
+      try { await router.close(); } catch { /* best-effort */ }
+      throw summonCancelledError();
+    }
+    // Cross-surface continuity (Phase 18/19): the rolling summary + recent
+    // window, so the companion carries the app conversation into the world.
+    // PURE DISK READ (260702) — compaction runs only as a chat-surface
+    // background task (foldIfDue), so a summon never waits on an LLM call.
+    // Still kicked off before the fork and awaited inside the 'spawn' handler:
+    // when this was an await between fork and the child event registrations,
+    // the child's one-shot 'spawn' event fired before the listener attached —
+    // init was never posted and the bot exited silently with code 0 (the
+    // 260702 "stuck connecting" regression).
+    const continuityP: Promise<Awaited<ReturnType<typeof buildLaunchContinuity>>> =
+      buildLaunchContinuity(characterId).catch(() => null);
+    // 260725 Knowledge: user-provided reference text, shipped in the init
+    // payload (the continuity pattern) and appended to the bot's cached
+    // system prefix. Pure disk read; edits apply on the next summon.
+    const knowledgeP: Promise<string> = readKnowledgeForPrompt(characterId).catch(() => '');
+    // 261014: the saved plan the first-spawn greeting should raise. Read now,
+    // before the session going online marks it used (index.ts
+    // consumeNextStep). Pure disk read; null = none open. 261020: a plan for
+    // a different game is not this greeting's (null), and stays open.
+    // 261020 (review): with whether it is tied to this game; a plan with no
+    // game is raised as talk, not as a task here.
+    const nextStepPlanP: Promise<{ text: string; notForGame: boolean } | null | undefined> = readPendingPlanFor(
+      paths.memoryDir(characterId),
+      Date.now(),
+      { game },
+    ).catch(() => undefined);
+    // ITEM 1 (quick/260523-t8d): expose the AI-backend mode + has-key state to
+    // the bot child so brain/log.js can suppress the noisy game-state +
+    // [haiku?] prompt logs when running in local (BYOK) mode without a key —
+    // those calls never fire successfully in that state, and the snapshot
+    // output is pure cognitive noise for the user staring at the LogsBar.
+    // As soon as either condition flips (key added OR backend → cloud-proxy),
+    // the logs reappear unmodified on the next bot fork.
+    const seiBackend = aiBackendKind; // 'local' | 'cloud-proxy'
+    const seiHasApiKey = apiKey ? '1' : '';
+    const forkAtMs = Date.now();
+    const child = utilityProcess.fork(botEntryPath(), [], {
+      stdio: 'pipe', // Pitfall 2 — required for stdout/stderr access
+      serviceName: `sei-bot-${characterId}`,
+      env: {
+        ...process.env,
+        // Profile-scoped root (NOT the device userData root): the bot derives
+        // its memory dir as `${userDataDir}/memory/<id>`, so this must point at
+        // the active account's profile so memory partitions per-account.
+        SEI_USER_DATA: paths.profileRoot(),
+        SEI_CHARACTER_ID: characterId,
+        SEI_BACKEND: seiBackend,
+        SEI_HAS_API_KEY: seiHasApiKey,
+      },
+    });
+    const { port1, port2 } = new MessageChannelMain();
+
+    let resolveExited!: () => void;
+    const exitedP = new Promise<void>((resolve) => {
+      resolveExited = resolve;
+    });
+
+    const session: ActiveSession = {
+      characterId,
+      game,
+      username,
+      backendKind: aiBackendKind,
+      llmProvider: llmInit?.provider,
+      startedAtMs,
+      child,
+      port1,
+      router,
+      exited: exitedP,
+      resolveExited,
+    };
+    sessions.set(characterId, session);
+    reporter.boot = { forkAtMs, marks: () => session.bootMarks };
+
+    // stdout/stderr line-split → router. We also keep the last ~16KB of
+    // stderr/stdout so the exit-before-ready handler can attach the actual
+    // crash trace to the BotStatus.message field (260508-mun: previously
+    // the renderer only saw "Bot exited before summon-ready (code=1)" with
+    // no signal about which require()/throw blew up). 260720: raised 4KB→16KB
+    // so the failed-summon diagnostic (onSummonFailure) keeps enough context
+    // to survive redaction + the analytics 8KB per-field cap with the actual
+    // crash still in frame.
+    const buffers = { stdout: '', stderr: '' };
+    const tails = { stdout: '', stderr: '' };
+    const TAIL_MAX = 16_384;
+    const sink = (chunk: Buffer, key: 'stdout' | 'stderr') => {
+      const chunkText = chunk.toString('utf-8');
+      // Mirror to the Electron-main terminal so a developer running
+      // `npm run dev` sees bot startup errors immediately, even before
+      // the LogsBar is opened in the renderer.
+      // eslint-disable-next-line no-console
+      (key === 'stderr' ? console.error : console.log)(`[bot-${key}] ${chunkText.replace(/\n$/, '')}`);
+      // Maintain rolling tail buffer for exit diagnostics.
+      tails[key] = (tails[key] + chunkText).slice(-TAIL_MAX);
+      // Original line-split → router behavior.
+      const text = buffers[key] + chunkText;
+      const lines = text.split('\n');
+      buffers[key] = lines.pop() ?? '';
+      for (const line of lines) if (line) router.append(line);
+    };
+    child.stdout?.on('data', (c: Buffer) => sink(c, 'stdout'));
+    child.stderr?.on('data', (c: Buffer) => sink(c, 'stderr'));
+
+    // Lifecycle messages
+    let summonResolved = false;
+    let summonResolve: () => void = () => {};
+    let summonReject: (err: Error) => void = () => {};
+    const summonPromise = new Promise<void>((resolve, reject) => {
+      summonResolve = resolve;
+      summonReject = reject;
+    });
+    // 260926: two budgets. BOOT_TIMEOUT_MS runs from fork until the bot's
+    // init-ack ("booted"); then SUMMON_TIMEOUT_MS runs from init-ack until
+    // summon-ready. A slow cold boot no longer eats the join budget.
+    let watchdogPhase: 'boot' | 'ready' = 'boot';
+    // 260929: a JOIN timeout on a Forge-family host is the host refusing a
+    // vanilla client, not a slow machine. Fabric with foreign mods and Quilt
+    // often let a vanilla client in, so their timeouts stay generic. Live, 4 of 10 BOT_START_TIMEOUTs in a week were modded hosts,
+    // and the timeout copy never mentioned mods. Report it as the modded-host
+    // failure so the player gets ModdedHostModal and the dashboard counts it
+    // with the kicks. A BOOT timeout (the bot never finished starting) says
+    // nothing about the world, so it is left alone.
+    const moddedHost = (): boolean => {
+      if (game !== 'minecraft') return false;
+      try { return isForgeFamilyLanHost(opts.getLanHost?.()); } catch { return false; }
+    };
+    const onWatchdog = (): void => {
+      if (summonResolved) return;
+      summonResolved = true;
+      // Derived from the actual constants so the diagnostic never lies about
+      // how long the watchdog actually waited.
+      const booting = watchdogPhase === 'boot';
+      const modded = !booting && moddedHost();
+      const err: ErrorClass = modded ? 'MODDED_HOST_REJECTED' : 'BOT_START_TIMEOUT';
+      const timeoutMessage = booting
+        ? `Bot did not finish booting within ${BOOT_TIMEOUT_MS / 1000}s of the fork ` +
+          '(no init-ack and no terminal lifecycle error from the child).'
+        : `Bot did not signal summon-ready within ${SUMMON_TIMEOUT_MS / 1000}s of booting ` +
+          '(no summon-ready and no terminal lifecycle error from the child).';
+      reporter.fire({
+        phase: booting ? 'boot_timeout' : 'ready_timeout',
+        errorClass: err,
+        errorMessage: timeoutMessage,
+        stderrTail: tails.stderr,
+        stdoutTail: tails.stdout,
+        ...(modded ? { reclassifiedFrom: 'BOT_START_TIMEOUT' } : {}),
+      });
+      sendStatus({
+        kind: 'error',
+        error: err,
+        message: booting
+          ? `Bot did not finish starting within ${BOOT_TIMEOUT_MS / 1000}s.`
+          : modded
+            ? `Sei did not get into this modded world within ${SUMMON_TIMEOUT_MS / 1000}s. Modded worlds often turn away players without their mods.`
+            : `Bot did not signal ready within ${SUMMON_TIMEOUT_MS / 1000}s.`,
+        characterId,
+      });
+      summonReject(new Error(err));
+    };
+    let summonTimer = setTimeout(onWatchdog, BOOT_TIMEOUT_MS);
+
+    // 260926: stop during a pending summon. Kill the child now (no graceful
+    // drain: it is not in the world yet, or barely) and reject the summon as
+    // cancelled; the catch below closes the port and drops the session. The
+    // exit handler sees summonResolved + stopRequested and reports nothing.
+    let cancelled = false;
+    ctl.cancel = () => {
+      if (summonResolved) return;
+      summonResolved = true;
+      cancelled = true;
+      clearTimeout(summonTimer);
+      session.stopRequested = true;
+      logger.info(`summon of ${characterId} cancelled by a stop: killing the bot process`);
+      try { child.kill(); } catch { /* best-effort */ }
+      summonReject(summonCancelledError());
+    };
+    if (ctl.cancelled) ctl.cancel();
+
+    port1.on('message', (e: { data: BotLifecycle | { type: 'vision-capability'; visionCapable: boolean } }) => {
+      let data = e.data;
+      // A cancelled summon's child is being killed: nothing it says counts.
+      if (cancelled) return;
+      // Phase 15 (D-10/VIS-03): the bot pushes its active-provider vision
+      // capability on summon-ready and on each backend switch. Route it to the
+      // dedicated renderer channel (NOT BotStatus) and return early — it is not
+      // a BotLifecycle event, so the lifecycleToStatus path below must not run.
+      if (data.type === 'vision-capability') {
+        opts.sendVisionCapability?.({ visionCapable: data.visionCapable === true });
+        return;
+      }
+      // 260618 (freeze fix): the bot hit a 401 expired_jwt and is asking for a
+      // fresh token. Fetch on demand and push it back. Not a BotLifecycle event,
+      // so return before lifecycleToStatus.
+      if ((data as { type?: string }).type === 'request-jwt') {
+        void handleJwtRefreshRequest(characterId);
+        return;
+      }
+      // 261017 (issue #46): a ChatGPT-plan bot wants a fresh access token
+      // (near expiry, or a 401 with force). Only a session that runs the
+      // chatgpt provider is ever answered.
+      if ((data as { type?: string }).type === 'request-chatgpt-token') {
+        const s = sessions.get(characterId);
+        if (s && s.backendKind === 'local' && s.llmProvider === 'chatgpt') {
+          void answerChatgptTokenRequest(
+            chatgptSession(),
+            (m) => s.port1.postMessage(m),
+            (data as { force?: unknown }).force === true,
+          );
+        }
+        return;
+      }
+      // The in-game bot is replying to a message that was routed in from the
+      // in-app chat (task 4). Deliver it to the chat transcript + renderer. Not
+      // a BotStatus event, so return before lifecycleToStatus.
+      if (data.type === 'chat') {
+        opts.onBotChat?.(characterId, (data as { text?: string }).text ?? '');
+        return;
+      }
+      // Voice calls (260705): the in-game bot called end_call() — hang up the
+      // player's call (the bot stays in the game). Not a BotStatus event.
+      if ((data as { type?: string }).type === 'call-end') {
+        // 261008: voice_call_ended reads this back (sessionGoodbye.ts).
+        const end = data as { nextStepHook?: boolean; nextStepLine?: unknown; nextStepGame?: unknown };
+        noteCompanionGoodbye(characterId, 'call', {
+          hook: end.nextStepHook === true,
+          line: typeof end.nextStepLine === 'string' ? end.nextStepLine : null,
+          game: goodbyeGame(end.nextStepGame) ?? null,
+        });
+        opts.onCallEndRequested?.(characterId);
+        return;
+      }
+      // Party redesign §2/§5: current world action. `name` set = a world-acting
+      // tool started; `name` null = the loop drained to idle. Forward to the
+      // renderer's presence-verb line. Not a BotStatus event — return before
+      // lifecycleToStatus.
+      if (data.type === 'action') {
+        opts.onBotAction?.(characterId, data.name ?? null, data.args, Date.now());
+        return;
+      }
+      // Minecraft dashboard (260721): telemetry snapshot from the live bot.
+      // Forwarded raw; mcDashboardService validates before the renderer sees
+      // it. Not a BotStatus event — return before lifecycleToStatus.
+      if ((data as { type?: string }).type === 'dashboard') {
+        opts.onDashboard?.(characterId, (data as { snapshot?: unknown }).snapshot);
+        return;
+      }
+      // 261011: action-outcome telemetry snapshot. Not a BotStatus event.
+      if ((data as { type?: string }).type === 'action-stats') {
+        try { opts.onActionStats?.(characterId, (data as { stats?: unknown }).stats); } catch { /* telemetry never breaks the session */ }
+        return;
+      }
+      if ((data as { type?: string }).type === 'session-digest') {
+        try { opts.onSessionDigest?.(characterId, (data as { digest?: unknown }).digest); } catch { /* never breaks the session */ }
+        return;
+      }
+      // Don't Starve Together (game-adapters M2, 260908): the bot's loopback
+      // listener is up; hand {port, token} to the DST module so its watcher
+      // can offer the summon to the mod on the next heartbeat. Not a
+      // BotStatus event — return before lifecycleToStatus.
+      if ((data as { type?: string }).type === 'dst-listen') {
+        void (async () => {
+          try {
+            const { DstListenMessageSchema } = await import('../shared/dstIpc');
+            const msg = DstListenMessageSchema.parse(data);
+            const mod = getGameModule('dontstarve') as { setSummonOffer?: (id: string, l: { port: number; token: string }) => Promise<void> } | null;
+            await mod?.setSummonOffer?.(characterId, { port: msg.port, token: msg.token });
+          } catch (err) {
+            logger.warn(`dst-listen handoff failed for ${characterId}: ${(err as Error).message}`);
+          }
+        })();
+        return;
+      }
+      // 260926: boot-phase snapshot (src/bot/bootTiming.js). Not a lifecycle
+      // status; kept on the session for the diagnostics.
+      if ((data as { type?: string }).type === 'boot-timing') {
+        const marks = (data as { marks?: unknown }).marks;
+        if (marks && typeof marks === 'object') session.bootMarks = marks as Record<string, number>;
+        return;
+      }
+      // 260926: init-ack means the bot has booted (modules, game runtime,
+      // config). Swap the cold-boot budget for the ready budget, which the bot
+      // started on its side at the same moment (readyBudgetMs).
+      if (data.type === 'init-ack' && !summonResolved && watchdogPhase === 'boot') {
+        watchdogPhase = 'ready';
+        clearTimeout(summonTimer);
+        summonTimer = setTimeout(onWatchdog, SUMMON_TIMEOUT_MS);
+        sendStatus({ kind: 'connecting', characterId, stage: 'joining' });
+      }
+      if (data.type === 'summon-ready' && !summonResolved) {
+        summonResolved = true;
+        clearTimeout(summonTimer);
+        // 260926: the success-side boot breakdown (character_summoned).
+        try {
+          opts.onSummonReady?.(
+            characterId,
+            bootPhaseProps({ attemptStartMs: startedAtMs, forkAtMs, marks: session.bootMarks ?? {} }),
+          );
+        } catch { /* diagnostics must never break a summon */ }
+        // Voice calls (260705): if the player has a call open with this
+        // character (it launch()ed into the world mid-call), apply the mode
+        // now — the bot only learns it over the port.
+        try {
+          if (opts.isVoiceCallActive?.(characterId)) {
+            port1.postMessage({ type: 'voice-call', active: true });
+          }
+        } catch { /* port raced closed — the call toggle will re-send */ }
+        // Stamp last_launched on successful connect — never-launched personas
+        // still show '—' until they reach summon-ready at least once.
+        void (async () => {
+          try {
+            await patchCharacter(characterId, (c) => ({ ...c, last_launched: new Date().toISOString() }));
+          } catch (err) {
+            logger.warn(`failed to stamp last_launched for ${characterId}: ${(err as Error).message}`);
+          }
+        })();
+        summonResolve();
+      }
+      // 260508-nkk: lifecycle 'error' is terminal for the summon promise.
+      // Previously only summon-ready cleared summonResolved, so a structured
+      // error from the bot (e.g. BOT_START_TIMEOUT from connect.js's wall-
+      // clock guard, or BOT_CRASH from a config validation throw) would
+      // arrive at the renderer correctly via lifecycleToStatus, but the
+      // outer 30s summonTimer would still tick and eventually OVERWRITE the
+      // specific error with a generic BOT_START_TIMEOUT message. Resolve
+      // the promise immediately so bot:summon's IPC caller unblocks at the
+      // moment we have actionable information, not 30s later.
+      // 260929: the bot's own connect guard timing out on a Forge-family host
+      // is the same modded-host failure as the ready watchdog above.
+      let reclassifiedFrom: string | undefined;
+      if (data.type === 'error' && !summonResolved && data.error === 'BOT_START_TIMEOUT' && moddedHost()) {
+        reclassifiedFrom = data.error;
+        data = { ...data, error: 'MODDED_HOST_REJECTED' };
+      }
+      // 260929: remember why the bot stopped itself (companion quit()).
+      if (data.type === 'summon-stopped' && typeof data.reason === 'string') {
+        session.selfStopReason = data.reason;
+        // 261008: a companion quit() says whether its goodbye left a next_time
+        // hook; bot_session_ended reads it back (sessionGoodbye.ts).
+        if (data.reason === 'quit') {
+          noteCompanionGoodbye(characterId, 'game', {
+            hook: data.nextStepHook === true,
+            line: typeof data.nextStepLine === 'string' ? data.nextStepLine : null,
+            game: goodbyeGame(data.nextStepGame) ?? null,
+          });
+        }
+      }
+      if (data.type === 'error' && !summonResolved) {
+        summonResolved = true;
+        clearTimeout(summonTimer);
+        // Diagnostics (260720): a structured pre-ready lifecycle error means
+        // the child ran but could not reach the world — the 'connect' phase.
+        // A message-less lifecycle error still gets explanatory text, never a
+        // bare enum.
+        reporter.fire({
+          phase: 'connect',
+          errorClass: String(data.error),
+          errorMessage:
+            String(data.message ?? '') ||
+            `Bot reported a ${String(data.error)} lifecycle error before summon-ready with no message text.`,
+          stderrTail: tails.stderr,
+          stdoutTail: tails.stdout,
+          ...(reclassifiedFrom ? { reclassifiedFrom } : {}),
+        });
+        summonReject(new Error(`${data.error}: ${data.message}`));
+      }
+      // Hard-stop popup (260616): a CLOUD_CREDITS_DEPLETED lifecycle error can
+      // arrive MID-SESSION — the running bot spent the last of its weekly
+      // allowance and extra credits, the proxy 402'd its next turn, and
+      // orchestrator.js latched and is tearing the bot down (it leaves the
+      // world on its own). The pre-flight summon gate (_summon →
+      // cloudOverLimit) only covers summon time, so raise the same popup here
+      // for a session that runs out while live. emitHardStop is idempotent
+      // (sets hardStopActive=true); fires whether or not the summon resolved.
+      if (data.type === 'error' && data.error === 'CLOUD_CREDITS_DEPLETED') {
+        logger.warn('[sei/sup] bot hit the limit mid-session — raising the hard-stop popup');
+        opts.emitHardStop({ reason: 'depleted' }, wallCtx());
+        // The bot latches halted and self-exits, but that self-shutdown is
+        // best-effort: if its gracefulShutdown stalls (a hung brain.stop /
+        // adapter teardown, or a delayed process.exit in the utilityProcess),
+        // the child stays alive and socket-connected and the avatar FREEZES
+        // in-world. Drive the same authoritative drain→kill path as a
+        // user-initiated stop so the character is guaranteed to leave: _stop
+        // posts {type:'stop'}, waits STOP_TIMEOUT_MS, then child.kill(). It
+        // no-ops if the bot already exited (session gone). Fire-and-forget.
+        void _stop(characterId, STOP_TIMEOUT_MS);
+      }
+      // A 429 arrived MID-SESSION and the bot latched, leaving the world quietly
+      // (no in-game chat). 260724: the daily-dollar spend bucket is gone, so
+      // this now only fires for the proxy's IP / abuse gates. Raise the popup;
+      // nothing is persisted, so the next summon is free to try again.
+      if (data.type === 'error' && data.error === 'DAILY_LIMIT_REACHED') {
+        const sec =
+          typeof data.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0
+            ? data.retryAfterSeconds
+            : 86_400;
+        logger.warn(`[sei/sup] bot was rate limited for ${sec}s — raising the popup`);
+        opts.emitHardStop({ reason: 'rate_limited', retry_after_seconds: sec }, wallCtx());
+        // Same backstop as the depleted path above: the bot is supposed to
+        // leave the world on its own, but a stalled self-shutdown would leave
+        // the avatar frozen in-game (still connected). Authoritatively drain
+        // and, on timeout, kill the child so the character actually leaves.
+        void _stop(characterId, STOP_TIMEOUT_MS);
+      }
+      // 261017 (issue #46): the bot stopped on a ChatGPT-plan answer (usage
+      // limit, not eligible, signed out, ...). Latch it in main's session so
+      // the renderer shows the usage-limit dialog and every other surface
+      // fails fast instead of asking again, and drive the same drain as the
+      // credits path so the body leaves even if the bot's own exit stalls.
+      if (data.type === 'error' && typeof data.error === 'string' && data.error.startsWith('CHATGPT_')) {
+        logger.warn(`[sei/sup] ChatGPT plan stopped the session: ${data.error}`);
+        try { chatgptSession().reportError({ code: data.error }); } catch { /* best-effort */ }
+        void _stop(characterId, STOP_TIMEOUT_MS);
+      }
+      const status = lifecycleToStatus(data, characterId, startedAtMs);
+      if (status) sendStatus(status);
+    });
+    port1.start();
+
+    // BL-01 (Phase 13 REVIEW): wire the 30-min JWT rotation pump for
+    // cloud-proxy sessions. The pump:
+    //   - fires once IMMEDIATELY (seed) to give the bot a fresh JWT,
+    //   - then every 30 min (well within the 1h Supabase JWT expiry),
+    //   - posts `{kind:'cloud-jwt-update', jwt}` onto port1 → bot's
+    //     parentPort handler calls _running.setAuthToken (BL-02 fix).
+    //
+    // Lifecycle: the teardown closure is stored on `session` so
+    // `_stopActive` calls it BEFORE port1.close(). For BYOK sessions
+    // we skip the pump entirely (no proxy traffic to authenticate).
+    //
+    // Without this wiring, `setupJwtRotation` was dead code — the bot
+    // relied on Supabase TOKEN_REFRESHED → jwtBridge → updateJwt for
+    // its rolling JWT, with no documented 30-min safety net.
+    // NOTE: every child.once/child.on registration from here through the
+    // 'exit' handler below MUST stay synchronous with the fork above — an
+    // `await` in between loses one-shot events ('spawn' especially) that fire
+    // while main is parked on the microtask queue. The JWT rotation pump and
+    // the continuity await both live elsewhere for exactly this reason.
+    child.once('spawn', () => {
+      void (async (): Promise<void> => {
+        // Wait (briefly) for the pre-fork continuity build. Capped so a slow
+        // summarization degrades to a continuity-less join instead of eating
+        // the 30s summon budget — the fold still lands in bridge.json for the
+        // next launch.
+        const continuity = await Promise.race([
+          continuityP,
+          new Promise<null>((r) => setTimeout(() => r(null), 4_000)),
+        ]);
+        const knowledge = await Promise.race([
+          knowledgeP,
+          new Promise<string>((r) => setTimeout(() => r(''), 2_000)),
+        ]);
+        // A slow read is "not known" (undefined: the greeting keeps the soft
+        // hint), not "no open plan" (null: no hint at all).
+        const nextStepPlan = await Promise.race([
+          nextStepPlanP,
+          new Promise<undefined>((r) => setTimeout(() => r(undefined), 1_000)),
+        ]);
+        // Ship mc_username, preferred_name, and skinServerBaseUrl so the bot
+        // can satisfy ConfigSchema, seed player_username for player-recognition
+        // without disk reads, and log the skin server URL for verification.
+        // The bot itself never hits the skin server — the consumer is the host
+        // MC client via CustomSkinLoader. character.username is preferred over
+        // sanitizeMcName(character.name) so each persona connects under its
+        // own in-game name.
+        try {
+          child.postMessage(
+            {
+              type: 'init',
+              character,
+              apiKey,
+              // Game adapters (M0): which runtime the bot loads and what it
+              // joins. `joinTarget` is the module's game-specific object
+              // (Minecraft: {port, motd, mc_username, skinServerBaseUrl}).
+              game,
+              joinTarget,
+              // Human label for the memory registry / section headers
+              // (Minecraft: the LAN MOTD). null lets the adapter pick its own.
+              worldLabel: mcTarget?.motd ?? (joinTarget as { label?: unknown }).label ?? null,
+              // LEGACY (one release): the pre-M0 Minecraft keys, for an older
+              // bot build that predates `game`/`joinTarget`.
+              lanPort,
+              lanMotd: mcTarget?.motd ?? null,
+              // 260801: when this attempt's watchdog fires (epoch ms). The bot
+              // sizes its own connect guard to land just inside it so a stalled
+              // join reports WHY instead of being overwritten by the generic
+              // 30s timeout. See summonDeadlineFrom above.
+              summonDeadlineAt: summonDeadlineFrom(startedAtMs),
+              // 260926: the ready budget. The bot starts it at init-ack, the
+              // same moment this supervisor re-arms its watchdog for it.
+              readyBudgetMs: SUMMON_TIMEOUT_MS,
+              // 260908 game packs: where the adapter's node_modules live.
+              // src/bot/packLoader.js registers a resolve hook for it before
+              // the game runtime is imported; equal to the bot's own app root
+              // in dev (hook is a no-op there).
+              packRoot,
+              // Profile-scoped root — the bot resolves memory under this dir, so it
+              // must be the active account's profile (paths.profileRoot()), never
+              // the device-global userData root.
+              userDataDir: paths.profileRoot(),
+              mc_username,
+              preferred_name,
+              // The bridged Looking (vision) mode. The bot's bootstrapWithInit
+              // reads this into config.vision.mode before ConfigSchema.parse.
+              visionMode,
+              // Appearance & feel: the "Realistic typing" toggle. The bot's
+              // bootstrapWithInit reads this into config.realistic_typing.
+              realisticTyping,
+              // 260709: conversation language (UserConfig.chat_language). The
+              // bot's bootstrapWithInit reads this into config.chat_language.
+              chatLanguage,
+              // 260618 (multi-agent): the OTHER AI companions already in this world,
+              // so the new bot knows its teammates from its first tick. The new
+              // session is already in `sessions` (added before this spawn handler),
+              // so filter it out. broadcastRoster() keeps this current afterwards.
+              companions: [...sessions.values()]
+                .filter((s) => s.characterId !== characterId && s.game === game)
+                .map((s) => s.username),
+              skinServerBaseUrl: mcTarget?.skinServerBaseUrl ?? opts.getSkinServerBaseUrl(),
+              // Plan 10-06: ship the latest known JWT so a bot summoned while
+              // signed_in has a token in hand before TOKEN_REFRESHED fires. Phase
+              // 13 reads this; in Phase 10 the bot loop ignores it.
+              // 260703 hard guard: cloud-proxy sessions ONLY — a BYOK bot has no
+              // business holding the Supabase token at all, even unused.
+              initialJwt: aiBackendKind === 'cloud-proxy' ? latestJwt : null,
+              // Phase 13-15 (PROXY-07): when the user has selected cloud-proxy as
+              // their AI backend, ship the proxy baseURL + initial Supabase JWT.
+              // The bot constructs the Anthropic SDK with
+              // {baseURL, authToken, apiKey:null} so all Anthropic traffic flows
+              // through Sei's Fly.io proxy (D-40 sub-delivery a). undefined here
+              // means BYOK — bot uses the legacy `apiKey` path.
+              cloudMode,
+              // 260816 (china-compat W2): the LLM provider selection for local
+              // (BYOK) sessions — {provider, model?, base_url?, api_key}.
+              // undefined in cloud-proxy mode. The bot maps it onto
+              // config.llm via applyLlmInit (src/bot/llmInit.js).
+              llm: llmInit,
+              // Phase 18/19: { summary, recent } from the in-app chat, seeded into
+              // the bot's prompt so it knows what you were just talking about. null
+              // when there is no prior chat. See chat/continuity.ts.
+              continuity,
+              // 260725 Knowledge: user-provided reference text (already capped +
+              // sanitized by knowledgeStore). '' = none. Appended to the bot's
+              // cached system prefix by the orchestrator.
+              knowledge,
+              // Voice calls (260707): true when this bot is spawning INTO an open
+              // call (launch()ed or summoned mid-call). Shipped in the init
+              // handshake — not the post-spawn {type:'voice-call'} message — so
+              // voiceCallActive is set BEFORE the first-spawn tick runs and the
+              // bot skips its cold FIRST CONTACT greeting (which would otherwise
+              // double the standalone launch reply). Deterministic; no race.
+              voiceCallActive: opts.isVoiceCallActive?.(characterId) ?? false,
+              // 261014: the open plan for the FIRST CONTACT greeting (null = none).
+              nextStepPlan: nextStepPlan === undefined ? undefined : (nextStepPlan?.text ?? null),
+              // 261020: true = that plan is not tied to this game (talk, not a task).
+              ...(nextStepPlan?.notForGame ? { nextStepPlanNotForGame: true } : {}),
+              // 260909: { provider, api_key } for the brain's search / visit
+              // tools. The bot maps it onto config.web in bootstrapWithInit.
+              webSearch,
+            },
+            [port2],
+          );
+        } catch (err) {
+          // Child died between spawn and the (post-continuity) post. The 'exit'
+          // handler owns the failure surface; just log.
+          logger.warn(`init postMessage failed for ${characterId}: ${(err as Error).message}`);
+        }
+      })();
+    });
+
+    // GUI-05: `child.on('error')` covers the rare case where Node emits an
+    // explicit error event on the UtilityProcess (e.g. failure-to-spawn on
+    // some platforms, or future Electron versions that surface fork errors
+    // here). Classify so the renderer sees an ErrorClass instead of a raw
+    // stack frame. Most spawn failures still surface via 'exit' below.
+    (child as UtilityProcess & { on: (ev: string, cb: (err: Error) => void) => void }).on?.(
+      'error',
+      (err: Error) => {
+        logger.error(`bot child error: ${err.message}`);
+        if (!summonResolved) {
+          summonResolved = true;
+          clearTimeout(summonTimer);
+          const ec = classifyChildError(err);
+          reporter.fire({
+            phase: 'fork',
+            errorClass: ec,
+            errorMessage: err.message,
+            stderrTail: tails.stderr,
+            stdoutTail: tails.stdout,
+          });
+          sendStatus({ kind: 'error', error: ec, message: err.message, characterId });
+          summonReject(err);
+        }
+      },
+    );
+
+    child.on('exit', (code) => {
+      // Accumulate playtime regardless of exit reason (clean stop or crash).
+      // We only count time between summon-ready and exit; if the bot never
+      // reached summon-ready (summonResolved still true via reject path),
+      // duration may still reflect connect-attempt time — that's fine.
+      const sessionMs = Date.now() - startedAtMs;
+      const playtimeWrite: Promise<void> =
+        sessionMs > 0
+          ? (async () => {
+              try {
+                await patchCharacter(characterId, (c) => ({
+                  ...c,
+                  playtime_ms: (c.playtime_ms ?? 0) + sessionMs,
+                }));
+                // Also fold into the profile-wide cumulative total so it
+                // survives this character being deleted later (the deleted
+                // character's time stays counted). Separate from the per-
+                // character write above; a failure in one shouldn't lose the other.
+                try {
+                  const { addPlaytimeMs } = await import('./configStore');
+                  await addPlaytimeMs(sessionMs);
+                } catch (err) {
+                  logger.warn(`failed to accumulate total playtime: ${(err as Error).message}`);
+                }
+              } catch (err) {
+                logger.warn(`failed to accumulate playtime for ${characterId}: ${(err as Error).message}`);
+              }
+            })()
+          : Promise.resolve();
+      if (!summonResolved) {
+        summonResolved = true;
+        clearTimeout(summonTimer);
+        // GUI-05 + 260508-mun hardening: include the last ~1KB of stderr
+        // (or stdout if stderr is empty) in the message so the renderer's
+        // Banner / model row error label shows actionable text rather than
+        // the bare exit code. Classification still runs against the
+        // combined tail so signals like "Cannot find module" can promote
+        // BOT_CRASH to a more specific ErrorClass over time.
+        const stderrTail = tails.stderr.slice(-1024).trim();
+        const stdoutTail = tails.stdout.slice(-1024).trim();
+        const tail = stderrTail || stdoutTail;
+        const baseMessage = `Bot exited before summon-ready (code=${code ?? 'null'})`;
+        const message = tail ? `${baseMessage}\n${tail}` : baseMessage;
+        // eslint-disable-next-line no-console
+        console.error(`[sei] ${baseMessage}\n--- bot stderr tail ---\n${stderrTail || '(empty)'}\n--- bot stdout tail ---\n${stdoutTail || '(empty)'}`);
+        const ec = classifyChildError(message);
+        // Diagnostics (260720): the child forked but died before summon-ready —
+        // the 'fork' phase, with the actual exit code and full tails attached.
+        reporter.fire({
+          phase: 'fork',
+          errorClass: ec,
+          errorMessage: message,
+          exitCode: code ?? null,
+          stderrTail: tails.stderr,
+          stdoutTail: tails.stdout,
+        });
+        sendStatus({ kind: 'error', error: ec, message, characterId });
+        summonReject(new Error(message));
+      } else {
+        // The bot WAS live (reached summon-ready) and has now exited without
+        // going through `_stop` — a spontaneous end: the player closed their
+        // world, the connection dropped, or the child crashed mid-session.
+        // Nothing else emits a terminal status on this path, so without this the
+        // renderer's `summons[id]` stays stuck at 'online'/'connecting' and the
+        // floating widget keeps a stale "Disconnect" button. Push `idle` so the
+        // widget clears. (A clean `_stop` also emits idle after `exited`
+        // resolves; a duplicate idle is harmless — the delete is idempotent.)
+        //
+        // Diagnostics (260720): a nonzero exit with no stop requested is a
+        // mid-session CRASH — report it with the tails. A code-0 exit (player
+        // closed the world, clean self-shutdown) is a normal session end, not
+        // a failure; those stay diagnostic-silent. Note the summon reporter's
+        // once-guard is untouched on the success path, so this is the first
+        // and only fire for the attempt.
+        if (session.stopRequested !== true && code != null && code !== 0) {
+          // 260806: strip Node's routine warnings first. The full tails still go
+          // into the diagnostic payload untouched — this only decides what the
+          // output MEANS. See NODE_NOISE_PATTERNS for why it has to happen here.
+          const tail = meaningfulTail(tails.stderr || tails.stdout);
+          // Honest classification (260720): only keep a specific class when
+          // the child's output carries actual evidence for it (classifier
+          // matched a real pattern). A tail with nothing classifiable — or no
+          // tail at all — is NOT connection loss; it is an opaque process
+          // death (SIGKILL, OOM killer, antivirus), so it stays BOT_CRASH
+          // with a synthesized explanation. Electron's UtilityProcess 'exit'
+          // event exposes only `code` (no signal), but on POSIX a
+          // signal-killed child reports the signal number as the code, so
+          // name the common ones.
+          const classified: ErrorClass = tail ? classifyChildError(tail) : 'BOT_CRASH';
+          let errorClass: ErrorClass;
+          let message: string;
+          if (classified === 'BOT_CRASH') {
+            errorClass = 'BOT_CRASH';
+            const signalNames: Record<number, string> = {
+              6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 15: 'SIGTERM',
+            };
+            const signalNote =
+              process.platform !== 'win32' && signalNames[code]
+                ? `, likely ${signalNames[code]}` : '';
+            // 260806: these two cases are NOT the same thing and used to share
+            // one sentence. A tail that the classifier does not recognize is
+            // still a crash INSIDE the bot with a stack trace attached — live,
+            // an unhandled rejection from a missing texture was reported to the
+            // user and to the dashboard as "antivirus, out of memory, or a
+            // manual kill", which sent everyone looking outside the app for a
+            // bug that was in it. Only a genuinely SILENT death supports that
+            // explanation, so only that case still makes it.
+            message = tail
+              ? `Bot process exited unexpectedly (code ${code}${signalNote}). ` +
+                `Its last output was:\n${tail.slice(-1024)}`
+              : `Bot process exited unexpectedly (code ${code}${signalNote}) with no error ` +
+                'output at all. This usually means something outside Sei ended the process: ' +
+                'antivirus, out of memory, or a manual kill.';
+          } else {
+            errorClass = classified;
+            message = `Bot exited mid-session (code ${code}).\n${tail.slice(-1024)}`;
+          }
+          reporter.fire({
+            phase: 'mid_session',
+            errorClass,
+            errorMessage: message,
+            exitCode: code,
+            stderrTail: tails.stderr,
+            stdoutTail: tails.stdout,
+          });
+          // Crash popup (260720): tell the renderer the LIVE session died —
+          // before this, a mid-session death emitted only 'idle' and the GUI
+          // showed nothing. `midSession: true` is the popup trigger; classes
+          // with a dedicated surface (LAN_NOT_OPEN, UNSUPPORTED_MC_VERSION)
+          // route to their own modals renderer-side. The terminal error also
+          // closes the play-session bookkeeping in broadcastStatus; the idle
+          // push below still clears the widget.
+          sendStatus({ kind: 'error', error: errorClass, message, characterId, midSession: true, endReason: 'crash' });
+        }
+        // 260929: why it ended. A requested stop carries its caller's reason;
+        // otherwise the bot left by itself: quit() says so on summon-stopped,
+        // a nonzero code is the crash reported just above, and any other
+        // clean exit is 'bot_exit'. (A lifecycle error, e.g. a kick loop, has
+        // already closed the session with its own reason; this idle then
+        // changes nothing downstream.)
+        const endReason: SessionEndReason = session.stopRequested === true
+          ? (session.stopReason ?? 'user_stop')
+          : code != null && code !== 0
+            ? 'crash'
+            : session.selfStopReason === 'quit'
+              ? 'companion_quit'
+              : 'bot_exit';
+        sendStatus({ kind: 'idle', characterId, endReason });
+      }
+      // Resolve `exited` only AFTER the playtime write lands. _stop awaits
+      // `exited` before emitting the idle status, and the renderer refreshes the
+      // character's last_launched / total playtime when it sees idle — so the
+      // store must already reflect this session's playtime by that point.
+      //
+      // Drop the dead session from the map here too: a MID-SESSION crash (exit
+      // after summon-ready) never goes through _stop, so without this the slot
+      // would linger — `_summon`'s `sessions.has(id)` early-return would then
+      // silently swallow a "try again", and the username would stay reserved
+      // against the duplicate-name guard. Deleting BEFORE resolveExited means a
+      // concurrent _stop sees an empty slot (skips its own delete) but still
+      // emits its idle status. Guarded by identity so a re-summon that already
+      // replaced this entry is left untouched.
+      void playtimeWrite.finally(() => {
+        if (sessions.get(characterId) === session) sessions.delete(characterId);
+        // 260618: a mid-session crash removes a companion — refresh the roster
+        // of the survivors so they stop treating this bot as present.
+        broadcastRoster();
+        // Party redesign §5: session ended (clean exit or crash) — clear the
+        // action verb so a stale "gathering…" doesn't outlive the bot.
+        opts.onBotAction?.(characterId, null, undefined, Date.now());
+        try { session.teardownChatgptTokens?.(); } catch { /* best-effort */ }
+        session.teardownChatgptTokens = undefined;
+        session.resolveExited();
+      });
+    });
+
+    // BL-01 (Phase 13 REVIEW): wire the 30-min JWT rotation pump for
+    // cloud-proxy sessions. The pump:
+    //   - fires once IMMEDIATELY (seed) to give the bot a fresh JWT,
+    //   - then every 30 min (well within the 1h Supabase JWT expiry),
+    //   - posts `{kind:'cloud-jwt-update', jwt}` onto port1 → bot's
+    //     parentPort handler calls _running.setAuthToken (BL-02 fix).
+    // Lifecycle: the teardown closure is stored on `session` so `_stop`
+    // calls it BEFORE port1.close(). BYOK sessions skip the pump entirely.
+    // Runs AFTER all child event registrations — this `await import` was the
+    // first async gap that could swallow the one-shot 'spawn' event.
+    if (aiBackendKind === 'cloud-proxy') {
+      try {
+        const { setupJwtRotation } = await import('./auth/proxyJwtFetcher');
+        session.teardownJwtRotation = setupJwtRotation(port1);
+      } catch (err) {
+        // The pump is a safety net — if the dynamic import fails for any
+        // reason (path mismatch in a packaged build, module load error),
+        // we log and keep going. The bot will still receive JWTs via
+        // updateJwt() on TOKEN_REFRESHED ticks.
+        logger.warn(
+          `setupJwtRotation failed to load — continuing without rotation pump: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // 261017 (issue #46): ChatGPT-plan rotations (and sign-out) go straight
+    // to this bot over its port.
+    if (aiBackendKind === 'local' && llmInit?.provider === 'chatgpt') {
+      session.teardownChatgptTokens = pushChatgptTokens(chatgptSession(), (m) => port1.postMessage(m));
+    }
+
+    // Wait for summon-ready or fail
+    try {
+      await summonPromise;
+      // 260618: the new bot is live — tell it (and every existing bot) the
+      // current companion roster so they all recognize each other immediately.
+      broadcastRoster();
+    } catch (err) {
+      // Cleanup on failure
+      // BL-01: tear down the rotation pump first — same ordering as
+      // _stopActive, so a pending tick doesn't postMessage onto a port
+      // we're about to close.
+      try { session.teardownJwtRotation?.(); } catch { /* best-effort */ }
+      try { session.teardownChatgptTokens?.(); } catch { /* best-effort */ }
+      session.teardownChatgptTokens = undefined;
+      try {
+        await router.close();
+      } catch {
+        // best-effort
+      }
+      try {
+        port1.close();
+      } catch {
+        // best-effort
+      }
+      try {
+        child.kill();
+      } catch {
+        // best-effort
+      }
+      if (sessions.get(characterId) === session) sessions.delete(characterId);
+      throw err;
+    }
+  }
+
+  /**
+   * WR-05 follow-up: live-swap the AI backend on the RUNNING bot. Posts a
+   * `{type:'backend-switch'}` message that the bot forwards into the live
+   * Anthropic SDK (anthropicClient.setBackend rebuilds the SDK instance), so
+   * the swap lands on the bot's NEXT Anthropic call instead of waiting for a
+   * manual restart. Mirrors the credential acquisition + JWT-rotation
+   * lifecycle of `_summon`, just retargeted at an already-forked child.
+   */
+  async function _switchBackend(kind: AiBackendKind): Promise<void> {
+    if (sessions.size === 0) return; // idle — next summon reads ai_backend_kind fresh
+    // Multi-summon: a backend switch is a per-account setting, so it applies to
+    // EVERY running bot. Acquire the shared credential once, then fan the
+    // `backend-switch` message out to each live session.
+    if (kind === 'cloud-proxy') {
+      // Acquire a fresh JWT for the immediate switch. Fall back to the cached
+      // latestJwt if the on-demand fetch fails — the proxy then 401s and the
+      // renderer's hard-stop / sign-in flow takes over, exactly as a cold
+      // summon with a missing JWT does.
+      let jwt = latestJwt ?? '';
+      try {
+        const { getProxyJwt } = await import('./auth/proxyJwtFetcher');
+        jwt = await getProxyJwt();
+        latestJwt = jwt;
+      } catch (err) {
+        logger.warn(
+          `switchBackend(cloud-proxy): getProxyJwt failed, using cached token: ${(err as Error).message}`,
+        );
+      }
+      for (const session of sessions.values()) {
+        // Track the live kind so updateJwt / the reactive 401 refresh treat
+        // this session as a legitimate JWT consumer from here on (260703).
+        session.backendKind = 'cloud-proxy';
+        // 261017: a cloud session never takes ChatGPT-plan tokens.
+        try { session.teardownChatgptTokens?.(); } catch { /* best-effort */ }
+        session.teardownChatgptTokens = undefined;
+        session.llmProvider = undefined;
+        try {
+          session.port1.postMessage({
+            type: 'backend-switch',
+            cloudMode: { baseURL: PROXY_BASE_URL, authToken: jwt },
+          });
+        } catch {
+          /* port closed during teardown — ignore */
+        }
+        // (Re)wire the 30-min rotation pump if this session doesn't already have
+        // one (i.e. it was summoned in BYOK mode). Idempotent: a session
+        // summoned in cloud-proxy mode keeps its existing pump. Set up AFTER the
+        // backend-switch post so the bot is already in cloud mode before the
+        // pump's seed tick lands a `cloud-jwt-update` (setAuthToken no-ops until
+        // cloudMode is set).
+        if (!session.teardownJwtRotation) {
+          try {
+            const { setupJwtRotation } = await import('./auth/proxyJwtFetcher');
+            session.teardownJwtRotation = setupJwtRotation(session.port1);
+          } catch (err) {
+            logger.warn(
+              `switchBackend(cloud-proxy): setupJwtRotation failed — continuing without rotation pump: ${(err as Error).message}`,
+            );
+          }
+        }
+      }
+    } else {
+      // local / BYOK. Load the key once; surface a keychain/missing-key error
+      // (parity with _summon) but STILL flip every live SDK to BYOK below — the
+      // dominant safety property is that a visible switch to "your own key" must
+      // stop routing through the paid cloud immediately (the inverse of the
+      // WR-05 surprise). Bots 401 on their next call until a key is set + re-summon.
+      let apiKey = '';
+      let keyError: unknown = null;
+      // 260828: read the whole UserConfig once — it feeds both the keyless
+      // check and the llm section shipped with the switch message below.
+      // Best-effort: on a read failure fall back to the historical
+      // always-check behavior and the anthropic default provider.
+      let userCfg: Awaited<ReturnType<typeof loadUserConfig>> | null = null;
+      try {
+        userCfg = await loadUserConfig();
+      } catch { /* fall through to the key check */ }
+      // 260817 (china-compat W10): ollama is keyless — mirror _summon's guard
+      // skip so a keyless ollama config never gets a spurious INVALID_API_KEY
+      // advisory on a cloud→local switch.
+      // 261017 (issue #46): the ChatGPT plan has no key either; its
+      // credential comes from main's OAuth session below.
+      const keylessProvider = ['ollama', 'chatgpt'].includes(userCfg?.provider ?? 'anthropic');
+      if (!keylessProvider) {
+        try {
+          // 260703: a MISSING key gets the same clear INVALID_API_KEY surface as
+          // a cold summon (see _summon) instead of an ENOENT that classifies as
+          // an opaque BOT_CRASH. The SDK still flips to BYOK below either way.
+          if (!(await hasApiKey())) {
+            throw new Error(
+              'LOCAL_NO_API_KEY: Local mode is on but no API key is saved. Add your API key in Settings, or switch to managed billing.',
+            );
+          }
+          apiKey = await loadApiKey();
+        } catch (err) {
+          keyError = err;
+        }
+      }
+      // 260828 (BYOK-switch fix): the switch message used to carry ONLY the
+      // apiKey, so a live bot switched cloud→local silently kept running
+      // Anthropic with stale defaults regardless of the configured provider.
+      // Ship the SAME llm section a fresh summon would build (shared helper),
+      // so the bot's applyLlmSwitch can reroute its provider/model/config.
+      let llm = buildLlmInitSection(userCfg ?? {}, apiKey);
+      let keyErrorClass: ErrorClass | null = null;
+      if (llm.provider === 'chatgpt') {
+        try {
+          llm = await chatgptBotInitSection(chatgptSession(), async () => {
+            const r = await resolveChatgptModel(storedProviderModel(userCfg ?? {}, 'chatgpt'));
+            return { model: r.model, reasoningEffort: r.reasoningEffort, vision: r.vision === 'yes' };
+          });
+        } catch (err) {
+          // The bot still flips off the cloud; with no token its first call
+          // asks main and stops on the same refusal.
+          keyError = err;
+          keyErrorClass = (err instanceof ChatgptSummonError ? err.code : 'NETWORK_OFFLINE') as ErrorClass;
+        }
+      }
+      for (const session of sessions.values()) {
+        // 260703 hard guard: flip the tracked kind FIRST so no concurrent
+        // updateJwt tick can post a token to a session that is now BYOK.
+        session.backendKind = 'local';
+        if (keyError) {
+          const message = (keyError && typeof keyError === 'object' && 'message' in keyError)
+            ? String((keyError as { message: unknown }).message)
+            : String(keyError);
+          const ec = keyErrorClass
+            ?? (message.startsWith('LOCAL_NO_API_KEY')
+              ? ('INVALID_API_KEY' as const)
+              : classifyChildError(keyError));
+          // ADVISORY, not terminal: this session STAYS LIVE — the bot remains
+          // connected in-world and just 401s on its next LLM call. Flag
+          // transient so broadcastStatus does not drop it from onlineIds (which
+          // would silently reroute in-game chat to the standalone brain) or post
+          // a spurious mid-session "played for X" row (260703).
+          sendStatus({
+            kind: 'error',
+            error: ec,
+            message,
+            characterId: session.characterId,
+            transient: true,
+          });
+        }
+        // Tear down the rotation pump BEFORE flipping the SDK so a pending tick
+        // can't post a stray cloud-jwt-update after the switch.
+        try { session.teardownJwtRotation?.(); } catch { /* best-effort */ }
+        session.teardownJwtRotation = undefined;
+        // 261017: (re)wire the ChatGPT-plan token push to match the provider.
+        session.llmProvider = llm.provider;
+        try { session.teardownChatgptTokens?.(); } catch { /* best-effort */ }
+        session.teardownChatgptTokens = undefined;
+        if (llm.provider === 'chatgpt') {
+          const port = session.port1;
+          session.teardownChatgptTokens = pushChatgptTokens(chatgptSession(), (m) => port.postMessage(m));
+        }
+        try {
+          session.port1.postMessage({ type: 'backend-switch', apiKey, llm });
+        } catch {
+          /* port closed during teardown — ignore */
+        }
+      }
+    }
+  }
+
+  /**
+   * 260705 (issue #6): the only public entry to `_summon`. Reserves the
+   * characterId synchronously — before `_summon`'s first await — so a second
+   * summon landing anywhere in the check-to-register gap joins the in-flight
+   * attempt (same promise, same outcome) instead of forking a duplicate child.
+   */
+  function summon(characterId: string, gameArg: GameId = 'minecraft'): Promise<void> {
+    const pending = pendingSummons.get(characterId);
+    if (pending) return pending;
+    const game: GameId = isGameId(gameArg) ? gameArg : 'minecraft';
+    lastGame.set(characterId, game);
+    const reporter = createFailureReporter(characterId);
+    const ctl: SummonControl = { cancelled: false };
+    summonControls.set(characterId, ctl);
+    const attempt = _summon(characterId, reporter, game, ctl)
+      .catch((err: unknown) => {
+        // A stop cancelled it: the user's own action, not a failure.
+        if (isSummonCancelled(err)) throw err;
+        // Diagnostics backstop (260720): any throw whose site did not report
+        // (all the pre-gate refusals, plus stragglers like a store read or
+        // fork throw) is a pre-fork failure. Once-guarded, so a site-specific
+        // fire above always wins. Several pre-gate refusals throw a BARE
+        // sentinel token (their message IS the enum); expand those to an
+        // actual cause description so error_message never just repeats
+        // error_class. Token-prefixed throws (LOCAL_NO_API_KEY: ...,
+        // SUMMON_USERNAME_CONFLICT: <name>) already carry their cause.
+        const BARE_TOKEN_DETAIL: Record<string, string> = {
+          LAN_NOT_OPEN:
+            'LAN_NOT_OPEN: refused before fork, no open LAN world was detected at summon time.',
+          CLOUD_CREDITS_DEPLETED:
+            'CLOUD_CREDITS_DEPLETED: refused before fork, the cloud credit balance is below the playable minimum.',
+          DAILY_LIMIT_REACHED:
+            'DAILY_LIMIT_REACHED: refused before fork, the daily play limit window is still active.',
+          PREFERRED_NAME_MISSING:
+            'PREFERRED_NAME_MISSING: refused before fork, preferred_name is missing from config (onboarding incomplete).',
+          GAME_WORLD_NOT_OPEN:
+            'GAME_WORLD_NOT_OPEN: refused before fork, no open game world was detected at summon time.',
+        };
+        const raw = errText(err);
+        reporter.fire({
+          phase: 'pre_gate',
+          errorClass: diagErrorClass(err),
+          errorMessage: BARE_TOKEN_DETAIL[raw] ?? raw,
+        });
+        throw err;
+      })
+      .finally(() => {
+        if (pendingSummons.get(characterId) === attempt) pendingSummons.delete(characterId);
+        if (summonControls.get(characterId) === ctl) summonControls.delete(characterId);
+        pendingUsernames.delete(characterId);
+      });
+    pendingSummons.set(characterId, attempt);
+    return attempt;
+  }
+
+  // 260810: register the module-level summon probe (see isCharacterSummoned
+  // above). Pending summons count — a bot mid-fork is about to own the file.
+  summonProbe = (characterId: string) =>
+    sessions.has(characterId) || pendingSummons.has(characterId);
+
+  return {
+    summon,
+    stop: (characterId?: string, reason: StopReason = 'user_stop') =>
+      characterId ? _stop(characterId, STOP_TIMEOUT_MS, reason) : _stopAll(STOP_TIMEOUT_MS, reason),
+    switchBackend: _switchBackend,
+    getActiveId: () => {
+      const first = sessions.keys().next();
+      return first.done ? null : first.value;
+    },
+    getActiveIds: () => [...sessions.keys()],
+    // Pending (pre-registration) summons count as active: every isActive gate
+    // is a "refuse while the bot is running" check (delete / reset memory /
+    // skin swaps), and a character mid-summon is about to be running — letting
+    // those proceed in the fork window would race the boot's memory reads.
+    isActive: (characterId: string) => sessions.has(characterId) || pendingSummons.has(characterId),
+    /**
+     * Task 4 — route an in-app chat message INTO a live game session so both
+     * surfaces share one conversation (same brain + prompt cache). Posts a
+     * `sei-chat` command over the port; the bot injects it as a priority chat
+     * event and replies back over the `type:'chat'` lifecycle. Returns false
+     * (caller falls back to the standalone chat brain) if no session is live.
+     */
+    sendSeiChat: (characterId: string, payload: { from: string; text: string; voice?: boolean }): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({
+          type: 'sei-chat',
+          from: payload.from,
+          text: payload.text,
+          // 260708: a live voice-call utterance, not an out-of-band app text.
+          // The bot frames it as in-game speech instead of "Sei chat".
+          voice: payload.voice === true,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    /**
+     * 260708: record-only mirror of a group-call line into a live session's
+     * chat history (a sibling companion's spoken line, or a player line routed
+     * to another bot). The bot records it without waking, except a companion
+     * line that names this bot (directed request). False → no live session.
+     */
+    observeSeiChat: (characterId: string, payload: { from: string; text: string }): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'sei-chat-observe', from: payload.from, text: payload.text });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // Voice calls (260705): forward the open/hang-up toggle into the live
+    // session. Same port-may-be-closed tolerance as sendSeiChat.
+    setVoiceCall: (characterId: string, active: boolean): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'voice-call', active });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // Voice calls (260705): ask a live in-game session to greet the player
+    // now that the call pipeline is live. False → caller uses the chat brain.
+    greetVoiceCall: (characterId: string): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'voice-call-greet' });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // 260725 play/pause: forward the in-app pause toggle into the live
+    // session (FSM hold + orchestrator freeze in the bot). Never persisted.
+    setGamePaused: (characterId: string, paused: boolean): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'game-pause', paused });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // 260725 runtime game mode (reactive/proactive): forward into the live
+    // session. Never persisted — every summon starts proactive in the bot.
+    setGameMode: (characterId: string, mode: 'reactive' | 'proactive'): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'game-mode', mode });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // Minecraft dashboard (260721): renderer visibility hint → live session.
+    // Same port-may-be-closed tolerance as sendSeiChat.
+    setDashboardWatch: (characterId: string, active: boolean): boolean => {
+      const session = sessions.get(characterId);
+      if (!session) return false;
+      try {
+        session.port1.postMessage({ type: 'dashboard-watch', active });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    // 260926: hard-capped. Pending summons are cancelled (killed) by _stop;
+    // live bots get a short drain, then the kill escalation; whatever is
+    // still alive at the cap is killed outright so quit never hangs on a bot.
+    shutdown: async () => {
+      let capTimer: ReturnType<typeof setTimeout> | undefined;
+      const drained = await Promise.race([
+        _stopAll(SHUTDOWN_DRAIN_MS, 'app_quit').then(() => true, () => true),
+        new Promise<boolean>((r) => { capTimer = setTimeout(() => r(false), SHUTDOWN_HARD_CAP_MS); }),
+      ]);
+      clearTimeout(capTimer);
+      if (!drained) {
+        logger.warn(`supervisor shutdown hit its ${SHUTDOWN_HARD_CAP_MS}ms cap: killing the remaining bots`);
+        for (const ctl of summonControls.values()) {
+          ctl.cancelled = true;
+          try { ctl.cancel?.(); } catch { /* best-effort */ }
+        }
+        for (const s of sessions.values()) {
+          s.stopRequested = true;
+          try { s.child.kill(); } catch { /* best-effort */ }
+        }
+      }
+    },
+    // Plan 10-06: cache the latest JWT and, if a session is live, push it on
+    // port1 with a `{type:'jwt'}` message. The utilityProcess in Phase 10
+    // ignores the message — that's expected; Phase 13 wires the consumer.
+    // We swallow post-message errors because the port may have closed during
+    // teardown (a SIGNED_OUT-triggered updateJwt(null) can race the bot's
+    // own exit handler).
+    updateJwt: (jwt: string | null) => {
+      latestJwt = jwt;
+      for (const session of sessions.values()) {
+        // 260703 hard guard: BYOK sessions never receive the Supabase token —
+        // the bot-side setAuthToken already no-ops without cloudMode, but the
+        // token must not cross into a local child's process at all.
+        if (session.backendKind !== 'cloud-proxy') continue;
+        try { session.port1.postMessage({ type: 'jwt', jwt }); }
+        catch { /* port closed during teardown; ignore */ }
+      }
+    },
+  };
+}
+
+export type { BotSupervisor as BotSupervisorType };

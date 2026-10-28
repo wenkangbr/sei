@@ -1,0 +1,533 @@
+import pkg from 'mineflayer-pathfinder'
+import { HOSTILE_MOBS } from './hostiles.js'
+const { goals } = pkg
+
+// Reflex evasion micro-controller (Phase 17, D-05). A ~20 Hz physicsTick
+// survival loop that evades incoming damage BEFORE it lands — the reactive
+// reflex tier of the hybrid hierarchy (D-04), acting on mineflayer structured
+// state rather than pixel RL (D-02). It is a sibling of startCombat: it lives
+// ENTIRELY on the adapter side and NEVER enters src/bot/brain/fsm.js, so it can
+// never abort the in-flight LLM action (no AbortController trip — the brain
+// keeps thinking, gather() keeps running).
+//
+// Three evasion mechanisms, two of them non-interruptive control-state pulses
+// (arrow sidestep, melee strafe — they add lateral velocity for a few ticks and
+// release, leaving the action's pathfinder goal untouched) and one goal-owning
+// flee (creeper — save/preempt/restore under the bot._seiReflexActive mutex,
+// see Task 3 below).
+
+// Skeletons that draw bows (the bow-draw telegraph applies to all of these).
+const RANGED_SKELETONS = new Set(['skeleton', 'stray', 'bogged', 'wither_skeleton'])
+
+// PvP opponent lock decay: a player counts as a melee threat only while we are
+// in an active exchange with them — the lock's `at` timestamp must be fresher
+// than this to keep circle-strafing. After the last blow it decays so the bot
+// can stand/talk/follow normally between rounds with PvP still armed (Task 2).
+const PVP_OPPONENT_TTL_MS = 10000
+
+// Threat priority ranks (lower wins): a creeper mid-fuse is the most urgent,
+// then an incoming arrow, then a creeper merely in flee range, then a melee mob.
+const RANK = { creeperPanic: 0, arrow: 1, creeper: 2, melee: 3 }
+
+function dist3(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+}
+
+// Player eye offset above entity.position (feet). The FOV gate measures angles
+// from the eyes, not the feet, so a mob on a ledge above/below reads correctly.
+const EYE_HEIGHT = 1.62
+
+/**
+ * Sight gate: is `targetPos` inside the bot's head-look cone? Reflexes should
+ * mirror a human player, who reacts to what is on screen, not to threats behind
+ * them. Uses the bot entity's yaw/pitch — in mineflayer that IS the head/look
+ * direction (bot.look()/lookAt() set it; gaze.js aims with the same values), so
+ * this is head direction, not body facing.
+ *
+ * View-vector convention matches gaze.js aimAt (yaw = atan2(-dx,-dz), pitch
+ * positive = up): viewDir = (-sin(yaw)cos(pitch), sin(pitch), -cos(yaw)cos(pitch)).
+ *
+ * `cosHalfFov` is cos(fov/2) precomputed by the caller. Fails OPEN (returns
+ * true) when yaw/pitch are missing/non-finite — no head data means we cannot
+ * gate, and a blind spot bug must never make the bot ignore every threat.
+ * Pure function (plain {x,y,z} math) so it is unit-testable in isolation.
+ */
+export function inFieldOfView(me, targetPos, cosHalfFov) {
+  const yaw = me?.yaw
+  const pitch = me?.pitch
+  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return true
+  const dx = targetPos.x - me.position.x
+  const dy = targetPos.y - (me.position.y + EYE_HEIGHT)
+  const dz = targetPos.z - me.position.z
+  const len = Math.hypot(dx, dy, dz)
+  if (len === 0) return true // on top of us: no meaningful direction, count as seen
+  const cp = Math.cos(pitch)
+  const vx = -Math.sin(yaw) * cp
+  const vy = Math.sin(pitch)
+  const vz = -Math.cos(yaw) * cp
+  return (dx * vx + dy * vy + dz * vz) / len >= cosHalfFov
+}
+
+/**
+ * Closest-approach (point-to-line) test for an arrow's ray.
+ *
+ * Given a ray from `arrowPos` along `arrowVel`, returns:
+ *   - `missDist`: the perpendicular distance from `botPos` to that ray (how far
+ *     the arrow misses the bot's centre by).
+ *   - `ahead`: whether the bot is in FRONT of the arrow along its travel
+ *     direction (dot(botPos - arrowPos, arrowVel) > 0). An arrow that already
+ *     flew past has `ahead === false` and must never trigger a dodge.
+ *
+ * Pure function (plain {x,y,z} math, no Vec3 dependency) so the ray geometry is
+ * unit-testable in isolation. ~D-05 highest-leverage core.
+ */
+export function closestApproach(arrowPos, arrowVel, botPos) {
+  const wx = botPos.x - arrowPos.x
+  const wy = botPos.y - arrowPos.y
+  const wz = botPos.z - arrowPos.z
+  const vlen = Math.hypot(arrowVel.x, arrowVel.y, arrowVel.z)
+  if (vlen === 0) return { missDist: Infinity, ahead: false }
+  const dx = arrowVel.x / vlen
+  const dy = arrowVel.y / vlen
+  const dz = arrowVel.z / vlen
+  // Projection of w onto the unit ray direction.
+  const t = wx * dx + wy * dy + wz * dz
+  const ahead = wx * arrowVel.x + wy * arrowVel.y + wz * arrowVel.z > 0
+  // Perpendicular component = w minus its projection along the ray.
+  const px = wx - t * dx
+  const py = wy - t * dy
+  const pz = wz - t * dz
+  const missDist = Math.hypot(px, py, pz)
+  return { missDist, ahead }
+}
+
+/**
+ * D-06 per-persona override point. Today this returns the FIXED config-key
+ * defaults and IGNORES `personaWeights` (a deliberate one-line behavioral
+ * no-op); Phase 16 persona weighting will later bias these thresholds per
+ * character (a timid persona flees creepers earlier, a brave one kites closer).
+ * The reflex tick reads EVERY threshold through this function so that future
+ * hook lands in exactly one place.
+ */
+export function resolveReflexThresholds(mc, personaWeights) {
+  void personaWeights // intentionally unused this phase — the D-06 hook stub
+  const num = (v, d) => (Number.isFinite(v) ? v : d)
+  return {
+    arrow_watch_blocks: num(mc?.arrow_watch_blocks, 16),
+    arrow_miss_threshold: num(mc?.arrow_miss_threshold, 1.2),
+    creeper_flee_enter_blocks: num(mc?.creeper_flee_enter_blocks, 8),
+    creeper_flee_exit_blocks: num(mc?.creeper_flee_exit_blocks, 12),
+    melee_kite_blocks: num(mc?.melee_kite_blocks, 4.5),
+    reflex_fov_deg: num(mc?.reflex_fov_deg, 120),
+  }
+}
+
+// Pick a body-relative sidestep direction perpendicular to an incoming arrow's
+// horizontal velocity. We step toward whichever side the bot is already offset
+// (sign of the horizontal cross product) so the pulse clears the ray fastest.
+// Either perpendicular direction clears a 0.3-wide hitbox; the sign just makes
+// it deterministic.
+function arrowSideHint(arrowPos, arrowVel, botPos) {
+  const cross = arrowVel.x * (botPos.z - arrowPos.z) - arrowVel.z * (botPos.x - arrowPos.x)
+  return cross >= 0 ? 'left' : 'right'
+}
+
+/**
+ * Classify every in-range entity into a single highest-priority threat, or
+ * null when nothing threatens. Distance-capped per threat class before any ray
+ * math (T-17-01 DoS mitigation: bound the scan). Returns
+ * `{ kind:'arrow'|'creeper'|'melee', entity, sideHint?, panic? }`.
+ *
+ * Priority: creeper-panic > arrow > creeper > melee.
+ *
+ * `th` defaults to a freshly resolved thresholds object but callers on the hot
+ * path (tick(), ~20 Hz) should pass the install-time `TH` they already hold so
+ * this never re-allocates per tick. `resolveReflexThresholds` remains the
+ * single D-06 override point either way — a future per-persona hook still only
+ * has to recompute `TH` once, at whatever cadence it needs, and thread it
+ * through here.
+ *
+ * SIGHT GATE: every threat class except a fusing creeper must be inside the
+ * head-look cone (`inFieldOfView`, reflex_fov_deg total) to register — a human
+ * player reacts to what is on screen, not to a mob behind them. The one
+ * exception is the creeper fuse/ignite telegraph, which is an AUDIO cue (the
+ * hiss) that players react to at any facing. Note the flee hysteresis in
+ * tick() runs off `_fleeId`, not this scan, so once a threat is noticed the
+ * bot stays aware of it even if it then leaves the cone.
+ */
+export function scanThreats(bot, mc, th = resolveReflexThresholds(mc)) {
+  const me = bot.entity
+  const botPos = me?.position
+  if (!botPos) return null
+
+  // deg * PI/360 = half-angle in radians.
+  const cosHalfFov = Math.cos(((th.reflex_fov_deg ?? 120) * Math.PI) / 360)
+
+  let best = null
+  let bestRank = Infinity
+  const consider = (cand, rank) => {
+    if (rank < bestRank) { best = cand; bestRank = rank }
+  }
+
+  for (const id in bot.entities) {
+    const e = bot.entities[id]
+    if (!e || e === me || !e.position) continue
+
+    // ── Arrows: any moving arrow whose ray passes within the miss threshold ──
+    if (e.name === 'arrow') {
+      const v = e.velocity
+      if (!v || (!v.x && !v.y && !v.z)) continue // grounded/stale arrow keeps its
+      // Sight gate before the ray math: an arrow flying in from behind is
+      // invisible to a human player and never triggers a dodge.
+      if (!inFieldOfView(me, e.position, cosHalfFov)) continue
+      const { missDist, ahead } = closestApproach(e.position, v, botPos)
+      if (ahead && missDist < th.arrow_miss_threshold) {
+        consider({ kind: 'arrow', entity: e, sideHint: arrowSideHint(e.position, v, botPos) }, RANK.arrow)
+      }
+      continue
+    }
+
+    const dist = dist3(e.position, botPos)
+
+    // ── Creepers: fuse/ignite telegraph = panic (any distance); else flee band ──
+    if (e.name === 'creeper') {
+      const md = e.metadata
+      const panic = md != null && (Number(md[16]) === 1 || Boolean(md[18]))
+      if (panic) {
+        // Fuse/ignite is the hiss — audible at any facing, so NOT sight-gated.
+        consider({ kind: 'creeper', entity: e, panic: true }, RANK.creeperPanic)
+      } else if (dist <= th.creeper_flee_enter_blocks && inFieldOfView(me, e.position, cosHalfFov)) {
+        consider({ kind: 'creeper', entity: e, panic: false }, RANK.creeper)
+      }
+      continue
+    }
+
+    // ── Skeletons (ranged): arm the arrow dodge on the bow-draw telegraph ──
+    // metadata index 8 bit 0x01 = "hand active" (drawing the bow).
+    if (RANGED_SKELETONS.has(e.name)) {
+      // Suppress the PRE-EMPTIVE bow-draw sidestep on a skeleton we are actively
+      // attacking (bot._seiOffensiveTarget): a committed attacker must CLOSE the
+      // distance to land hits, not dodge laterally off its pursuit line (the
+      // skeleton-kite bug). The REAL incoming-arrow dodge (the `arrow` branch
+      // above) stays active always — dodging a live arrow while charging is fine.
+      // The bow-draw telegraph is purely visual, so a skeleton drawing behind
+      // the bot's back never arms the pre-emptive sidestep.
+      const committed = bot._seiOffensiveTarget != null && bot._seiOffensiveTarget === e.id
+      if (!committed && dist <= th.arrow_watch_blocks && inFieldOfView(me, e.position, cosHalfFov)) {
+        const md = e.metadata
+        if (md != null && (Number(md[8]) & 0x01) === 1) {
+          const v = me.velocity ?? { x: 0, y: 0, z: 1 }
+          consider({ kind: 'arrow', entity: e, sideHint: arrowSideHint(e.position, v, botPos) }, RANK.arrow)
+        }
+      }
+      // wither_skeleton is also a melee threat; fall through to the melee check.
+      if (e.name !== 'wither_skeleton') continue
+    }
+
+    // ── Melee mobs (and, in PvP mode, the ACTUAL opponent): kite when just
+    // outside reach ── (band + 2 for approach margin). PvP: when bot._seiPvp is
+    // on, ONLY the locked opponent is kited — the player we are exchanging blows
+    // with (bot._seiPvpOpponent, `at` fresher than PVP_OPPONENT_TTL_MS) or the
+    // one we are actively attacking (bot._seiOffensiveTarget). Treating ANY
+    // player as a threat made the bot circle-strafe its own owner constantly.
+    // The _seiOffensiveTarget suppression in doMeleeStrafe still applies, so it
+    // stops strafing to commit a hit.
+    const isPlayer = e.type === 'player' || e.username != null
+    const lock = bot._seiPvpOpponent
+    const isPvpOpponent = bot._seiPvp && isPlayer && (
+      (lock != null && e.id === lock.id && (Date.now() - lock.at) < PVP_OPPONENT_TTL_MS) ||
+      e.id === bot._seiOffensiveTarget
+    )
+    // Sight-gated like the rest: a zombie sneaking up from behind lands its
+    // first hit (combat retaliation then turns the bot around) instead of the
+    // bot pre-kiting a mob it could not have seen.
+    if ((HOSTILE_MOBS.has(e.name) || isPvpOpponent) && dist <= th.melee_kite_blocks + 2 &&
+        inFieldOfView(me, e.position, cosHalfFov)) {
+      consider({ kind: 'melee', entity: e }, RANK.melee)
+    }
+  }
+
+  return best
+}
+
+/**
+ * Install the reflex survival loop. Returns a `dispose()` that removes the
+ * physicsTick listener and clears any pending pulse timers. Mirrors the
+ * startCombat factory shape (config slice, closed-over state, NaN guard) but its
+ * loop is a `physicsTick` subscription rather than a setInterval.
+ *
+ * Public contract surfaced to Plan 02 (live wiring):
+ *   - bot._seiReflexActive  (bool)   — true while a creeper flee owns the goal
+ *   - bot._seiSavedGoal      (goal)  — the action goal to restore on flee exit
+ *   - bot.emit('sei:reflex', payload) — one in-character announcement per engagement
+ */
+export function startReflex(bot, config) {
+  const mc = config?.adapter?.minecraft ?? config ?? {}
+  if (mc.reflex_enabled === false) return () => {}
+
+  // Idempotent re-arm: mineflayer emits 'spawn' on a dimension change WITHOUT a
+  // 'death', and connect.js re-arms on every non-first spawn — so tear down any
+  // previous install before wiring a new one, or each portal trip stacks a
+  // duplicate physicsTick loop / goal_updated listener.
+  if (typeof bot._seiReflexDispose === 'function') { try { bot._seiReflexDispose() } catch (_) {} }
+
+  const tickMs = Number.isFinite(mc.reflex_tick_ms) && mc.reflex_tick_ms > 0 ? mc.reflex_tick_ms : 50
+  const TH = resolveReflexThresholds(mc)
+
+  let _disposed = false
+  let _pulseSide = null
+  let _pulseTimer = null
+  let _strafeSide = null
+  let _strafeFlipAt = 0
+
+  // Creeper-flee goal-ownership state. The installed mineflayer-pathfinder
+  // (^2.4.5) does NOT expose `bot.pathfinder.goal`, so we track the externally
+  // set action goal via the `goal_updated` event (the pathfinder emits it on
+  // every setGoal). `_selfSetting` masks our own flee set/restore so we never
+  // snapshot our own GoalInvert as the goal to restore.
+  let _fleeId = null
+  let _savedDynamic = false
+  let _trackedGoal = null
+  let _trackedDynamic = false
+  let _selfSetting = false
+
+  function onGoalUpdated(goal, dynamic) {
+    if (_selfSetting) return
+    // A survival takeover (drowning swim-up / critical-HP retreat) installs a
+    // transient safety goal, not the action goal we must restore on flee exit.
+    // Ignore goal updates while survival owns the goal: _trackedGoal keeps the
+    // real pre-survival action goal (the same value survival saved in its own
+    // slot). Without this, a creeper appearing mid-retreat would snapshot
+    // survival's flee-the-mob goal as bot._seiSavedGoal and, on flee exit,
+    // restore THAT instead of the goto/gather/build goal — which is then lost
+    // and the action times out as cant_reach. Mirrors survival's own tracker.
+    if (bot._seiSurvivalActive || bot._seiCriticalRetreat) return
+    _trackedGoal = goal
+    _trackedDynamic = Boolean(dynamic)
+  }
+
+  function releasePulse() {
+    if (_pulseTimer) { clearTimeout(_pulseTimer); _pulseTimer = null }
+    if (_pulseSide) {
+      try { bot.setControlState(_pulseSide, false) } catch (_) {}
+      _pulseSide = null
+    }
+  }
+
+  // Drop any melee-strafe control states we are holding. Guarded on _strafeSide
+  // so it is a no-op when we are NOT strafing — critical, or we would clear the
+  // forward/back the pathfinder/gather legitimately set on non-melee ticks.
+  function releaseStrafe() {
+    if (!_strafeSide) return
+    try { bot.setControlState(_strafeSide, false) } catch (_) {}
+    try { bot.setControlState('forward', false) } catch (_) {}
+    try { bot.setControlState('back', false) } catch (_) {}
+    _strafeSide = null
+    _strafeFlipAt = 0
+  }
+
+  // ARROW response: a transient lateral sidestep pulse (~4 ticks). It does NOT
+  // touch the pathfinder goal — the action's goal re-asserts course next tick.
+  function doArrowDodge(threat) {
+    if (_pulseSide) return // already mid-pulse
+    const side = threat.sideHint === 'right' ? 'right' : 'left'
+    _pulseSide = side
+    try { bot.setControlState(side, true) } catch (_) {}
+    _pulseTimer = setTimeout(releasePulse, tickMs * 4)
+  }
+
+  // MELEE response: a best-effort circle-strafe pulse over the goal. Alternates
+  // left/right every ~10 ticks and nudges forward/back to hold a 2.5-4 band.
+  // Suppressed when we are already offensively attacking this exact mob.
+  function doMeleeStrafe(threat) {
+    const mob = threat.entity
+    if (bot._seiOffensiveTarget != null && bot._seiOffensiveTarget === mob.id) return
+    try { bot.lookAt(mob.position) } catch (_) {}
+    const now = Date.now()
+    if (!_strafeSide || now >= _strafeFlipAt) {
+      if (_strafeSide) { try { bot.setControlState(_strafeSide, false) } catch (_) {} }
+      _strafeSide = _strafeSide === 'left' ? 'right' : 'left'
+      try { bot.setControlState(_strafeSide, true) } catch (_) {}
+      _strafeFlipAt = now + tickMs * 10
+    }
+    const d = dist3(mob.position, bot.entity.position)
+    try {
+      if (d < 2.5) { bot.setControlState('back', true); bot.setControlState('forward', false) }
+      else if (d > 4) { bot.setControlState('forward', true); bot.setControlState('back', false) }
+      else { bot.setControlState('forward', false); bot.setControlState('back', false) }
+    } catch (_) {}
+  }
+
+  function creeperPanic(creeper) {
+    const md = creeper?.metadata
+    // index 16 === 1 → fuse/swelling; index 18 → ignited (flint-and-steel lit).
+    return md != null && (Number(md[16]) === 1 || Boolean(md[18]))
+  }
+
+  function countNearbyHostiles(botPos) {
+    let n = 0
+    for (const id in bot.entities) {
+      const e = bot.entities[id]
+      if (!e || e === bot.entity || !e.position) continue
+      if (e.name !== 'creeper' && !HOSTILE_MOBS.has(e.name)) continue
+      if (dist3(e.position, botPos) <= TH.creeper_flee_exit_blocks) n++
+    }
+    return n
+  }
+
+  // CREEPER response: a GOAL-OWNING flee (the one reflex that takes the
+  // pathfinder goal). Snapshot the action goal, take over with
+  // GoalInvert(GoalFollow(creeper, exit)), and restore on exit — transparent to
+  // gather()/follow() under the bot._seiReflexActive mutex that those consumers
+  // yield to (Plan 02 wiring). Fire exactly one in-character announcement per
+  // engagement (rising edge — enterFlee runs once, the active-flee branch in
+  // tick() keeps us fleeing without re-entering).
+  function enterFlee(creeper) {
+    bot._seiReflexActive = true
+    bot._seiSavedGoal = _trackedGoal ?? bot.pathfinder?.goal ?? null
+    _savedDynamic = _trackedDynamic
+    _fleeId = creeper.id
+    releasePulse() // drop any in-flight sidestep before taking the goal
+    try {
+      const goal = new goals.GoalInvert(new goals.GoalFollow(creeper, TH.creeper_flee_exit_blocks))
+      _selfSetting = true
+      bot.pathfinder.setGoal(goal, true)
+    } catch (_) {} finally { _selfSetting = false }
+    emitReflex(creeper)
+  }
+
+  function exitFlee() {
+    try {
+      _selfSetting = true
+      bot.pathfinder.setGoal(bot._seiSavedGoal ?? null, _savedDynamic)
+    } catch (_) {} finally { _selfSetting = false }
+    bot._seiReflexActive = false
+    bot._seiSavedGoal = null
+    _fleeId = null
+  }
+
+  // The payload is shaped so Plan 02's fsmWires translation can frame an
+  // in-character say() offering attack()/explore(). The emit MUST NOT block
+  // evasion and MUST NOT enqueue into fsm.js.
+  function emitReflex(creeper) {
+    try {
+      bot.emit('sei:reflex', {
+        threat: creeper.name,
+        // 261019: the live entity, so a turn written after it blew up or
+        // left can say so (observers/staleAttacker.js).
+        entity: creeper,
+        threatLabel: creeper.name,
+        // noticed: did a positive telegraph fire (fuse/ignite) vs a distance-only flee
+        noticed: creeperPanic(creeper),
+        count: countNearbyHostiles(bot.entity.position),
+      })
+    } catch (_) {}
+  }
+
+  function tick() {
+    if (_disposed) return
+    // 260725 play/pause: no evasion while the player has the game paused — an
+    // AFK player takes the arrow. Drop any pulse/strafe we are holding and let
+    // go of the flee mutex WITHOUT restoring the saved goal (pause.js already
+    // cleared the goal; restoring one here would walk the frozen body).
+    if (bot._seiPaused) {
+      releasePulse()
+      releaseStrafe()
+      if (_fleeId != null) {
+        _fleeId = null
+        bot._seiReflexActive = false
+        bot._seiSavedGoal = null
+      }
+      return
+    }
+    // Knockback packets occasionally produce transient non-finite velocity /
+    // position (combat.js:67-71). Skip the tick rather than read garbage —
+    // T-17-01 mitigation: a malformed packet never throws out of the loop.
+    const vel = bot.entity?.velocity
+    const pos = bot.entity?.position
+    if (!vel || !pos) return
+    if (!Number.isFinite(vel.x) || !Number.isFinite(vel.y) || !Number.isFinite(vel.z)) return
+    if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) return
+    if (bot.health != null && bot.health <= 0) return
+
+    // Player-knockback stagger (Task 3): while a stagger window from a player
+    // hit is open, assert NO movement control states — let the server's
+    // knockback velocity play out visibly instead of the strafe/flee walking it
+    // off within a tick or two. combat.js opened the window and already called
+    // clearControlStates(); we just drop our own bookkeeping and yield the window.
+    if (bot._seiStaggerUntil != null && Date.now() < bot._seiStaggerUntil) {
+      releasePulse()
+      releaseStrafe()
+      return
+    }
+
+    // Maintain an active flee independent of scanThreats: once fleeing we keep
+    // going until the creeper is gone or beyond the EXIT band (hysteresis —
+    // scanThreats only reports the creeper at ≤ enter band, so the exit decision
+    // must live here). A panicking (fusing) creeper holds the flee at any range.
+    if (_fleeId != null) {
+      const creeper = bot.entities[_fleeId]
+      if (!creeper || !creeper.position) { exitFlee(); return }
+      const d = dist3(creeper.position, pos)
+      if (!creeperPanic(creeper) && d > TH.creeper_flee_exit_blocks) exitFlee()
+      return // creeper is top priority while the flee is active
+    }
+
+    const threat = scanThreats(bot, mc, TH)
+    // Any tick that is not a live melee engagement drops leftover strafe control
+    // states (mob died/left, or a higher-priority threat took over) so the bot
+    // does not keep drifting after the fight.
+    if (!threat || threat.kind !== 'melee') releaseStrafe()
+    if (!threat) return
+
+    if (threat.kind === 'creeper') return enterFlee(threat.entity)
+    if (threat.kind === 'arrow') return doArrowDodge(threat)
+    if (threat.kind === 'melee') {
+      // 261012 (pass 4a): while an attack is committed to a target
+      // (attackEntity or the owner defense), do not strafe around a
+      // different melee mob. In the protect_player eval the second zombie
+      // walked next to the first, and the strafe (look at it, step sideways
+      // and back) can fight the chase toward the player's attacker.
+      if (bot._seiOffensiveTarget != null && threat.entity?.id !== bot._seiOffensiveTarget) {
+        releaseStrafe()
+        return
+      }
+      // 261019 (pass 19): nor while an action's walk is moving her (a goTo,
+      // a pickup walk). The strafe looks at the mob every tick and runs
+      // after the pathfinder, so its yaw wins, and its "forward" once the
+      // mob fell 4 blocks behind walked her back to it: the walk circled the
+      // zombie until it gave up as "stuck" (pathing-repro hit_walk_goto, 3
+      // of 8). Walking on is the better dodge; she outpaces a zombie.
+      if (bot._seiActionActive > 0 && bot.pathfinder?.isMoving?.()) {
+        releaseStrafe()
+        return
+      }
+      return doMeleeStrafe(threat)
+    }
+  }
+
+  function dispose() {
+    if (_disposed) return
+    _disposed = true
+    releasePulse()
+    releaseStrafe()
+    // Clear the mutex so consumers (gather/follow/goTo) never deadlock waiting
+    // on a flee that will never exit; leave the goal as-is on teardown.
+    if (bot._seiReflexActive) { bot._seiReflexActive = false; bot._seiSavedGoal = null }
+    _fleeId = null
+    try { bot.removeListener('physicsTick', tick) } catch (_) {}
+    try { bot.removeListener('death', dispose) } catch (_) {}
+    try { bot.removeListener('end', dispose) } catch (_) {}
+    try { bot.removeListener('goal_updated', onGoalUpdated) } catch (_) {}
+    if (bot._seiReflexDispose === dispose) bot._seiReflexDispose = null
+  }
+
+  bot.on('physicsTick', tick)
+  // Dispose on BOTH death and end (kick/disconnect — no 'death' fires there).
+  // dispose is _disposed-guarded, so firing on both is safe.
+  bot.once('death', dispose)
+  bot.once('end', dispose)
+  bot.on('goal_updated', onGoalUpdated)
+  bot._seiReflexDispose = dispose
+  return dispose
+}

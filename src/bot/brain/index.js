@@ -1,0 +1,619 @@
+// src/brain/index.js
+//
+// Brain entry point. Wires the orchestrator + memory layer + priority queue,
+// then attaches the supplied adapter. Game-agnostic — no game-runtime
+// import, no src/adapter/ import.
+//
+// Boot composer (src/index.js) provides:
+//   - config (validated by src/config.js)
+//   - adapter (an object satisfying src/brain/types.js's Adapter contract,
+//     e.g. createMinecraftAdapter({ bot, config }))
+//
+// brain.start({ config, adapter }) returns { stop() } so the boot composer
+// can shut down cleanly on SIGTERM / Electron quit / test teardown.
+
+import { createOrchestrator } from './orchestrator.js'
+import { playerLabel } from './convoMemory.js'
+import { createSessionState } from './sessionState.js'
+import { loadPlayer, savePlayer, formatPlayerSeedBlock } from './memory/player.js'
+import { Priority, createPriorityQueue, attackedPriority } from './fsm.js'
+import { idleCadenceMs } from './prompts.js'
+import { sessionActionStats } from './actionStats.js'
+
+const REQUIRED_ADAPTER_MEMBERS = [
+  'listActions', 'getActionSchema', 'getActionDescription', 'executeAction',
+  'createSnapshotComposer', 'worldPrimer',
+  'attach',
+  'chat', 'closeAnySessions',
+  // capabilities (booleans / accessors) — checked existence only
+  'supportsAutoEat', 'supportsFollow',
+  // identity
+  'botUsername', 'getKnownPlayers',
+]
+
+/**
+ * 260708: per-speaker debounce for observed call lines. A companion's spoken
+ * turn arrives as SEPARATE mirrored lines (the renderer splits replies into
+ * sentences), and waking the brain once per sentence would fire three P1
+ * turns for one utterance. Lines from the same speaker within `debounceMs`
+ * coalesce into ONE wake carrying the joined text; a line from a different
+ * speaker flushes the pending wake first so ordering holds. Exported for
+ * testing.
+ */
+export function createObserveWakeCoalescer(fire, debounceMs = 700) {
+  let pending = null
+  const flush = () => {
+    const p = pending
+    pending = null
+    if (!p) return
+    clearTimeout(p.timer)
+    try { fire(p.from, p.lines.join(' ')) } catch {}
+  }
+  return {
+    push(from, line) {
+      if (pending && pending.from !== from) flush()
+      if (!pending) pending = { from, lines: [], timer: null }
+      pending.lines.push(line)
+      clearTimeout(pending.timer)
+      pending.timer = setTimeout(flush, debounceMs)
+    },
+    dispose() {
+      if (!pending) return
+      clearTimeout(pending.timer)
+      pending = null
+    },
+  }
+}
+
+function assertAdapter(adapter) {
+  if (!adapter || typeof adapter !== 'object') {
+    throw new Error('brain.start: adapter must be an object')
+  }
+  for (const k of REQUIRED_ADAPTER_MEMBERS) {
+    if (!(k in adapter)) {
+      throw new Error(`brain.start: adapter missing required member: ${k}`)
+    }
+  }
+}
+
+/**
+ * Start the brain.
+ *
+ * @param {Object} args
+ * @param {Object} args.config   Validated config (src/config.js).
+ * @param {import('./types.js').Adapter} args.adapter
+ * @param {{info?:Function,warn?:Function,error?:Function,debug?:Function}} [args.logger]
+ * @returns {Promise<{ stop: () => Promise<void> }>}
+ */
+export async function start({ config, adapter, logger = console, onTerminalError = null, onAuthExpired = null, onSeiChatReply = null, onQuitRequested = null, onCallEndRequested = null, onAction = null }) {
+  assertAdapter(adapter)
+
+  // ── Memory layer ────────────────────────────────────────────────────
+  const playerStore = { loadPlayer, savePlayer, formatPlayerSeedBlock }
+
+  // sessionState needs a `bot`-shaped object for player presence checks
+  // (bot.players + bot.once('playerJoined', ...)). We hand it a thin shim
+  // that proxies into the adapter so brain code stays game-agnostic.
+  const sessionBotShim = {
+    get players() { return adapter.getKnownPlayers() },
+    get username() { return adapter.botUsername },
+    once(eventName, listener) {
+      if (eventName === 'playerJoined') {
+        // Wire one-shot via attach handler chain. We re-attach a tiny
+        // single-use joined hook on top of whatever brain.start already
+        // wired by stashing it on the closure below — see attach call.
+        _onceJoinedListeners.push(listener)
+      }
+    },
+  }
+  const _onceJoinedListeners = []
+  // 260508-nkk follow-up: gates the initial-greeting nudge so it fires once
+  // per session (first real spawn), not on every reconnect-respawn cycle.
+  let greetingFired = false
+
+  const sessionState = await createSessionState({
+    playerMdPath: config.memory.player_md_path,
+    config,
+    bot: sessionBotShim,
+    logger,
+  })
+
+  // ── Priority queue (brain-side FSM) ─────────────────────────────────
+  // Defer creating the queue until after the orchestrator exists so the
+  // dispatcher can route to handleDispatch.
+  let queue = null
+  // 260708: the last REAL hit taken (attackerKind !== 'reflex'), so a death
+  // that follows within the window can name its cause in the death prompt.
+  let _lastAttack = null
+  const DEATH_CAUSE_WINDOW_MS = 30_000
+  // 260708: coalesced wake for observed call lines (see observeSeiChat below).
+  // playerSpoke:false → never preempts an in-flight LLM call; voice:true →
+  // the turn takes the teammate-voice framing (reply or end silently).
+  const _observeWake = createObserveWakeCoalescer((from, joined) => {
+    try {
+      queue.enqueue(Priority.P1_CHAT, 'sei:chat_received', {
+        username: from,
+        message: joined,
+        text: joined,
+        addressed: true,
+        playerSpoke: false,
+        seiChat: true,
+        voice: true,
+      })
+    } catch (err) {
+      logger.warn?.(`[sei/brain] observe wake enqueue failed: ${err.message}`)
+    }
+  })
+  const reenqueue = (event, data, priority = null) => {
+    if (!queue) return
+    let p = priority
+    if (p == null) {
+      // Choose default priority by event name (mirrors the old fsm.js
+      // bot.on(...) priority assignments).
+      switch (event) {
+        case 'sei:attacked':       p = Priority.P0_SAFETY; break
+        case 'sei:chat_received':  p = Priority.P1_CHAT; break
+        // A death is worth a prompt turn + a say(), but must NOT outrank a real
+        // P0 safety event — route at conversation tier (mirrors the reflex
+        // reasoning on attackedPriority). Used when the orchestrator re-fires a
+        // death that arrived mid-loop (see handleDispatch's single-flight case).
+        case 'sei:death':          p = Priority.P1_CHAT; break
+        // 260514-ngj: sei:joined retired — spawn first-fire enqueues
+        // sei:idle (P3) instead. Routing left absent on purpose so a
+        // stray sei:joined would land at default (P2_MOVEMENT) and surface
+        // as the bug it is.
+        case 'sei:loop_terminal':  p = Priority.P2_5_LOOP_END; break
+        // 260513-wkd: action_complete fires when an in_flight long-running
+        // action settles (resolve OR abort). Routed at P2.1 so a same-batch
+        // P2_MOVEMENT enqueue dequeues first (sort by priority asc); the new
+        // mid-loop iteration runs on the next processNext tick.
+        case 'sei:action_complete': p = Priority.P2_ACTION_COMPLETE; break
+        // 260516-0yw: action_tick fires while a long-runner is in_flight to
+        // give the model a chance to comment / abort. Priority 2.3 sits
+        // between action_complete (2.1) and loop_end (2.5) so a same-batch
+        // settle drains FIRST and the tick is suppressed naturally.
+        case 'sei:action_tick':    p = Priority.P2_ACTION_TICK; break
+        case 'sei:loop_end':       p = Priority.P2_5_LOOP_END; break
+        case 'sei:idle':           p = Priority.P3_IDLE; break
+        default:                   p = Priority.P2_MOVEMENT; break
+      }
+    }
+    // sei:loop_terminal is an internal signal — reset the idle timer and stop.
+    // The previous loop_end auto-tick was removed: it doubled brain calls on
+    // every input and produced redundant acknowledgement messages. Idle ticks
+    // (sei:idle, P3) are now the only non-input wake-up path; the model
+    // controls within-loop iteration via tool_use chains.
+    if (event === 'sei:loop_terminal') {
+      queue.resetIdleTimer()
+      return
+    }
+    queue.enqueue(p, event, data)
+  }
+
+  // ── Orchestrator ────────────────────────────────────────────────────
+  const orchestrator = createOrchestrator({
+    adapter, config, logger,
+    sessionState, playerStore,
+    reenqueue,
+    onTerminalError,
+    onAuthExpired,
+    // Task 4 — where to send a reply when the turn was triggered by a Sei-chat
+    // message (route to chat surface), and how to honor a quit() tool call.
+    onSeiChatReply,
+    onQuitRequested,
+    // Voice calls (260705) — how to honor an end_call() tool call (hang up the
+    // player's call without leaving the game).
+    onCallEndRequested,
+    // Party redesign §2/§5 — current world-action verb emitter (or null clear).
+    onAction,
+  })
+
+  // ── Build the priority queue with the orchestrator's handleDispatch ─
+  queue = createPriorityQueue({
+    onDispatch: (event, data, signal) => orchestrator.handleDispatch(event, data, signal),
+    // Synchronous preempt hook: lets a player chat / attack abort an in-flight
+    // LLM call that is parking the dispatch thread, so the interrupt reaches the
+    // model in one round-trip instead of waiting out a slow mid-loop call.
+    onPreempt: (event, data) => orchestrator.handlePreempt(event, data),
+    // 260615: idle cadence is driven by the proactiveness tier (Passive 10min /
+    // Reactive 1min / Agentic 5s), so a self-directed character resumes its
+    // goal fast while a passive one only stirs rarely. An explicit
+    // llm.idle_fallback_ms in config still wins as a manual override.
+    // 260725: passed as a FUNCTION so every idle re-arm re-reads the tier —
+    // the in-app reactive/proactive mode buttons mutate
+    // config.persona.proactiveness live (orchestrator.setGameMode) and the
+    // cadence must follow without a re-summon.
+    // 260921: never sooner than the reply window of a line she just said. The
+    // tier cadence is for resuming work; a question needs longer than 5s to
+    // be answered (orchestrator REPLY_WINDOW_MS). Slower tiers already clear it.
+    // 260924: Stardew only (REPLY_WINDOW_GAMES); the orchestrator returns 0 for
+    // Minecraft and DST so their idle cadence is what it was.
+    idleFallbackMs: () => Math.max(
+      config.llm?.idle_fallback_ms ?? idleCadenceMs(config.persona?.proactiveness),
+      orchestrator.replyWindowRemainingMs?.() ?? 0,
+    ),
+    logger,
+  })
+
+  // ── Attach adapter handlers ────────────────────────────────────────
+  adapter.attach({
+    onPlayerJoined: (player) => {
+      sessionState.onPlayerJoined(player).catch(err =>
+        logger.warn?.(`[sei/brain] sessionState.onPlayerJoined failed: ${err.message}`))
+      // Drain any once('playerJoined') listeners installed by sessionState
+      // before the adapter wire was ready (Pitfall 2 belt-and-suspenders).
+      while (_onceJoinedListeners.length > 0) {
+        const l = _onceJoinedListeners.shift()
+        try { l(player) } catch {}
+      }
+    },
+    onPlayerLeft: (player) => {
+      sessionState.onPlayerLeft(player).catch(err =>
+        logger.warn?.(`[sei/brain] sessionState.onPlayerLeft failed: ${err.message}`))
+    },
+    onChat: (evt) => {
+      // Record incoming chat in convoMemory so the next Loop's seed turn
+      // carries it (chat.js used to call orchestrator.recordIncomingChat
+      // directly; we keep that record path here so the adapter only emits
+      // normalized events). This runs ALWAYS — even for a suppressed line —
+      // so a message aimed at a sibling still lands in this bot's chat history.
+      // 260921: EXCEPT a game event (evt.gameEvent: a new day, 10 PM). Nobody
+      // said it, so it has no place in the conversation transcript, where it
+      // read as a speaker and reset "has the player spoken since my last line".
+      if (!evt.gameEvent) {
+        try { orchestrator.recordIncomingChat?.(evt.username, evt.text, { companion: evt.fromCompanion === true }) } catch {}
+      } else {
+        // 261014: it still happened, so it is a "game:" line in the transcript.
+        // The notice is written as an instruction; only its fact is recorded.
+        try { orchestrator.recordGameEvent?.('game', { text: evt.text, fact: evt.eventFact }) } catch {}
+      }
+      // 260618 (M1): a message aimed only at another companion, or a sibling
+      // bot's own chatter, is recorded above but must NOT interrupt this bot.
+      // chat.js set the flag; honoring it here keeps the line in history while
+      // skipping the wake (the "only goes in chat history" behavior).
+      if (evt.suppressInterrupt) return
+      // 261011: a real player line this bot should answer starts the
+      // unanswered-chat clock (brain/actionStats.js). Counts only.
+      if (evt.playerSpoke === true && !evt.gameEvent) {
+        try { sessionActionStats.notePlayerChat() } catch {}
+      }
+      // Enqueue with the adapter-compatible payload shape (chat.js produced
+      // { username, message, addressed, playerSpoke }; the priority queue's
+      // player-chat preemption keys on `data.playerSpoke === true`, so we
+      // pass through both `text` and `message` for compatibility).
+      queue.enqueue(Priority.P1_CHAT, 'sei:chat_received', {
+        username: evt.username,
+        message: evt.text,
+        text: evt.text,
+        addressed: evt.addressed,
+        playerSpoke: evt.playerSpoke,
+        ...(evt.gameEvent ? { gameEvent: true } : {}),
+      })
+    },
+    onAttacked: (evt) => {
+      // 260708: remember the last REAL hit (not a reflex warning — the bot was
+      // not hit there) so a death that follows can name its cause. Without
+      // this, sei:death carries only the position and the model has no idea
+      // what killed it — live failure: Sui died mid-PvP-spar with Marv and
+      // said "i have literally no idea what just happened".
+      // 261019: 'defend' is a mob hitting the PLAYER, not her.
+      if (evt?.attackerKind !== 'reflex' && evt?.attackerKind !== 'defend') {
+        _lastAttack = {
+          label: evt?.attackerLabel ?? 'something',
+          kind: evt?.attackerKind ?? 'mob',
+          pvp: evt?.pvp === true,
+          at: Date.now(),
+        }
+      }
+      // Tier by attackerKind: a reflex (proactive threat warning — the bot was
+      // NOT hit) is conversation-tier (P1_CHAT) so it never preempts/aborts a
+      // player-chat reply; a real attack (player/mob) stays safety-tier
+      // (P0_SAFETY). The event NAME stays 'sei:attacked' — downstream dispatch
+      // and the reflex-vs-attack prompt framing key on attackerKind, not the
+      // name. See attackedPriority in ./fsm.js.
+      // 261014: a "game:" line in the transcript (reflex warnings are skipped
+      // inside; repeat hits fold into one line).
+      try { orchestrator.recordGameEvent?.('attacked', evt) } catch {}
+      // 261019 (pass 19): which of her lives this hit belongs to, so one that
+      // is still queued when she dies is dropped instead of answered after
+      // the respawn.
+      if (evt && typeof evt === 'object') {
+        const l = orchestrator.life
+        if (Number.isFinite(l)) evt._life = l
+      }
+      queue.enqueue(attackedPriority(evt), 'sei:attacked', evt)
+    },
+    // 261019 (pass 19): the moment she dies, before the respawn. The death
+    // turn (onDeath) comes after the respawn; until then the orchestrator
+    // drops any turn the dead body was still writing. Optional: adapters that
+    // only report the death itself skip it.
+    onDying: () => {
+      try { orchestrator.noteDeath?.() } catch {}
+    },
+    onDeath: (evt) => {
+      // The player killed the bot (or it fell/burned/etc). Enqueue a real
+      // prompt turn so the model reacts in character and can decide whether to
+      // recover its dropped items — the old code only logged + respawned, so
+      // the next turn showed full hp / empty inventory with no explanation and
+      // the model confabulated. P1_CHAT: earns a say() without preempting a
+      // genuine P0 attack. The FSM serializes this against the respawn spawn
+      // (onSpawn is greeting-guarded and only enqueues on the FIRST spawn), so
+      // there's no double-fire / race. evt.pos is the death location (may be
+      // null if the entity position was unreadable).
+      // 260708: attach the last real hit when it was recent — the death prompt
+      // renders it as the cause (deathAddendum in adapter/minecraft/prompts.js).
+      // 261019 (pass 19): measured from the moment she died. The Minecraft
+      // adapter reports the death after the respawn, a second or so later.
+      const diedAt = Number.isFinite(evt?.diedAt) ? evt.diedAt : Date.now()
+      const sinceMs = _lastAttack ? diedAt - _lastAttack.at : Infinity
+      const lastAttack = sinceMs <= DEATH_CAUSE_WINDOW_MS
+        ? {
+            label: _lastAttack.label,
+            kind: _lastAttack.kind,
+            pvp: _lastAttack.pvp,
+            secondsBefore: Math.max(1, Math.round(sinceMs / 1000)),
+          }
+        : null
+      const deathText = typeof evt?.deathText === 'string' && evt.deathText ? evt.deathText : null
+      try { orchestrator.recordGameEvent?.('death', { ...(lastAttack ? { lastAttack } : {}), ...(deathText ? { deathText } : {}) }) } catch {}
+      queue.enqueue(Priority.P1_CHAT, 'sei:death', {
+        pos: evt?.pos ?? null,
+        ...(lastAttack ? { lastAttack } : {}),
+        // 261019 (pass 19): what she lost and the game's death message, for
+        // the death framing (adapter/minecraft/prompts.js deathAddendum).
+        ...(Array.isArray(evt?.lost) ? { lost: evt.lost } : {}),
+        ...(evt?.keptAll === true ? { keptAll: true } : {}),
+        ...(deathText ? { deathText } : {}),
+      })
+    },
+    onSpawn: () => {
+      // D-57: deferred player-presence check after spawn settles.
+      sessionState.onSpawn().catch(err =>
+        logger.warn?.(`[sei/brain] sessionState.onSpawn failed: ${err.message}`))
+      // World awareness: resolve which world this is (stable number + label),
+      // segment MEMORY.md, and feed the current world into the snapshot. The
+      // spawn point is known by now, so the fingerprint is computable.
+      orchestrator.noteSpawn?.().catch(err =>
+        logger.warn?.(`[sei/brain] orchestrator.noteSpawn failed: ${err.message}`))
+      // Initial-greeting nudge moved here from a top-level setTimeout
+      // (260508-nkk follow-up). Was previously fired unconditionally on
+      // brain start, even when mineflayer never spawned — so a connect
+      // failure + reconnect loop produced one Haiku call per retry, with
+      // every loop running on `(snapshot unavailable)` because bot.entity
+      // was undefined. Gating on the actual spawn event stops the API burn
+      // and ensures the greeting only fires when there's a real world.
+      // greetingFired guards against re-firing on respawn-after-death.
+      if (greetingFired) return
+      greetingFired = true
+      setTimeout(() => {
+        try {
+          // 260514-ngj: spawn first-fire now enqueues sei:idle at P3 rather
+          // than sei:joined at P1. The greeting flows through the normal
+          // idle-tick path; the R1-R4 interrupt-response model only applies
+          // to P0/P1-triggered iterations, and a join is not an interrupt of
+          // an existing loop — it's the very first tick. P3 also means the
+          // greeting cannot starve a P0 attack or P1 chat that lands a beat
+          // later. The 'hint' field is dropped — idle is observational by
+          // construction, the seed prompt handles framing.
+          queue.enqueue(Priority.P3_IDLE, 'sei:idle', { reason: 'just_connected_first_spawn' })
+        } catch (err) {
+          logger.warn?.(`[sei/brain] spawn-idle enqueue failed: ${err.message}`)
+        }
+      }, config.memory?.spawn_settle_delay_ms ?? 500)
+    },
+    // Game-adapters M0 follow-up (260908): an adapter can ask for an idle
+    // tick with a reason it names (DST: a day-phase change; Stardew: a new
+    // day, night approaching). It rides the same P3 path as the spawn
+    // greeting, so it can never starve a P0 attack or P1 chat, and it is
+    // ignored until the first spawn has fired so a wire that emits before the
+    // body exists cannot burn an LLM call on '(snapshot unavailable)'.
+    onIdleNudge: (evt) => {
+      if (!greetingFired) return
+      const reason = typeof evt?.reason === 'string' && evt.reason ? evt.reason : 'adapter_nudge'
+      try {
+        queue.enqueue(Priority.P3_IDLE, 'sei:idle', { ...(evt ?? {}), reason })
+      } catch (err) {
+        logger.warn?.(`[sei/brain] adapter idle nudge enqueue failed: ${err.message}`)
+      }
+    },
+  })
+
+  orchestrator.start().catch(err => logger.warn?.(`[sei/brain] orchestrator.start failed: ${err.message}`))
+  // ITEM 2 (quick/260523-t8d): system messages emitted by the brain into the
+  // LogsBar console are prefixed with [CONSOLE] at the START of the line
+  // (before any timestamp prefix the logger adds). Casing is preserved as-is
+  // — no upper/lowercase coercion is applied anywhere on the system-message
+  // path; the literal "Sei online." capitalization the user typed renders
+  // unchanged. The [CONSOLE] tag distinguishes brain-emitted notices from
+  // bot-runtime chat / haiku / action tags.
+  logger.info?.('[CONSOLE] [sei] Sei online.')
+
+  return {
+    // Task 4 — deliver a message that arrived over Sei chat (player is NOT
+    // in-game) as a priority chat event on THIS session, framed so the bot knows
+    // it's out-of-band and that quit() leaves the game. Its reply routes back to
+    // the chat surface via onSeiChatReply (see orchestrator._emitSayLine).
+    deliverSeiChat({ from, text, voice } = {}) {
+      const raw = String(text ?? '').trim()
+      if (!raw) return
+      const who = String(from || 'The player')
+      try { orchestrator.recordIncomingChat?.(who, raw, { companion: false }) } catch {}
+      try { sessionActionStats.notePlayerChat({ voice: voice === true }) } catch {}
+      // 260708: a live voice-call utterance while the bot is in-game is NOT an
+      // out-of-band text message, and the old framing ("NOT in the game with
+      // you right now") was factually wrong on every line of a play-while-
+      // calling session — the model burned reasoning reconciling it with a
+      // snapshot showing the player 3 blocks away. Voice lines carry the RAW
+      // words plus voice:true; the orchestrator's voice-aware turn framing
+      // (playerMessageText / NUDGES.actionTurn) supplies the addressing
+      // guidance instead of a wrapper baked into the message text.
+      if (voice === true) {
+        try {
+          queue.enqueue(Priority.P1_CHAT, 'sei:chat_received', {
+            username: who,
+            message: raw,
+            text: raw,
+            addressed: true,
+            playerSpoke: true,
+            seiChat: true,
+            voice: true,
+          })
+        } catch (err) {
+          logger.warn?.(`[sei/brain] deliverSeiChat enqueue failed: ${err.message}`)
+        }
+        return
+      }
+      // 260910: the "NOT in the game" reading is a Minecraft fact (the app
+      // is where a player types when they are out of the world). A Stardew
+      // or Don't Starve host IS in the game whenever the world is open, and
+      // read with the old framing the companion asked whether the player
+      // was "actually here" while standing one tile from them.
+      const hostGame = typeof adapter?.gameName === 'string' && adapter.gameName !== 'Minecraft'
+      // 260925: named by role. The player's chosen name can be "Sei" (the
+      // app) or a companion's, and "Sei typed this in the Sei app" is how a
+      // playtest companion lost track of who asked what (convoMemory.playerLabel).
+      const whoLabel = playerLabel(who)
+      const framed = hostGame
+        ? `The ${whoLabel} typed this in the Sei app rather than the game's chat (they are still in the game with you; the app is just another way to talk). ` +
+          `They said: "${raw}". Reply with say() as usual; it reaches them in the app too. If you would rather stop playing to talk, call quit_game().`
+        : `The ${whoLabel} messaged you through Sei chat. They are NOT in the game with you right now. ` +
+          `They said: "${raw}". Reply to them in chat. If you would rather stop playing to talk, call quit_game().`
+      try {
+        queue.enqueue(Priority.P1_CHAT, 'sei:chat_received', {
+          username: who,
+          message: framed,
+          text: framed,
+          addressed: true,
+          playerSpoke: true,
+          seiChat: true,
+        })
+      } catch (err) {
+        logger.warn?.(`[sei/brain] deliverSeiChat enqueue failed: ${err.message}`)
+      }
+    },
+    /**
+     * 260708: a line someone ELSE spoke on the group voice call (a sibling
+     * companion, or the player when this bot was not the routed recipient).
+     * Recorded into chat history, and for COMPANION lines the bot wakes on
+     * EVERY line — the turn framing (teammate voice guidance) lets the model
+     * choose to answer or end silently, and mid-action the default is to keep
+     * going. The old name-gate is gone (the user wants the bot responsive to
+     * the whole call, deciding for itself). Player lines stay record-only:
+     * the player's utterances already reach this brain as direct turns
+     * (deliverSeiChat), so waking here too would fire twice per message.
+     * Multi-sentence companion turns coalesce into one wake (see
+     * createObserveWakeCoalescer).
+     */
+    observeSeiChat({ from, text } = {}) {
+      const raw = String(text ?? '').trim()
+      if (!raw) return
+      const isPlayer = from === 'player' || !from
+      const who = isPlayer
+        ? String(config.player_display_name || 'The player')
+        : String(from)
+      try { orchestrator.recordIncomingChat?.(who, raw, { companion: !isPlayer }) } catch {}
+      if (isPlayer) return
+      _observeWake.push(who, raw)
+    },
+    /**
+     * Voice calls (260705): the player just opened a voice call and the audio
+     * pipeline is live — prompt the bot to speak first (like greeting on spawn).
+     * P1 like player chat so it preempts idle work; setVoiceCall(true) has
+     * already flipped, so the say() reply routes into the call.
+     */
+    deliverVoiceCallGreeting() {
+      const framed =
+        '[A voice call with the player just connected — they can hear your voice now. ' +
+        'Say a short in-character hello first, like picking up a phone. One line, via say(). ' +
+        'Do not mention tools or that this is a system message.]'
+      try {
+        queue.enqueue(Priority.P1_CHAT, 'sei:chat_received', {
+          username: 'sei',
+          message: framed,
+          text: framed,
+          addressed: true,
+          playerSpoke: true,
+          seiChat: true,
+        })
+      } catch (err) {
+        logger.warn?.(`[sei/brain] deliverVoiceCallGreeting enqueue failed: ${err.message}`)
+      }
+    },
+    async stop() {
+      // Drop any pending observed-line wake so its timer can't fire into a
+      // disposed queue.
+      try { _observeWake.dispose() } catch {}
+      // Order matters. dispose() FIRST flips the FSM's `disposed` flag (so the
+      // sei:action_complete that an action-abort fires is dropped, not
+      // re-dispatched) and aborts any in-flight DISPATCH (a parked LLM call).
+      try { queue.dispose() } catch {}
+      // THEN abort the in-flight long-runner. dispose() can't reach it: when a
+      // gather/dig/explore/goTo/follow is running, the loop is suspended on
+      // sei:action_complete and the FSM's currentAction is null, so the action
+      // lives on currentLoop.inFlight's own controller. Without this, a stop
+      // pressed mid-action didn't cancel anything — the action ran to
+      // completion and the stop only took effect once bot.quit() dropped the
+      // connection (the stop-button lag).
+      try { orchestrator.abortActive?.() } catch {}
+      try { await adapter.closeAnySessions() } catch {}
+    },
+    /**
+     * Phase 13-15 (PROXY-07): forward a refreshed JWT to the Anthropic SDK
+     * for cloud-proxy mode. No-op when cloudMode is absent (BYOK).
+     */
+    setAuthToken: (token) => { try { orchestrator.setAuthToken?.(token) } catch {} },
+    /**
+     * 260618: update the roster of OTHER AI companion usernames sharing this
+     * world. src/bot/index.js calls this from the {type:'roster'} port message
+     * (and once from the init payload). No-op for single-bot sessions.
+     */
+    setCompanions: (names) => { try { orchestrator.setCompanions?.(names) } catch {} },
+    /**
+     * Voice-call mode (260705): the player opened/hung up a voice call with
+     * this companion. src/bot/index.js calls this from the {type:'voice-call'}
+     * port message. While active, say() routes to the call (chat surface →
+     * TTS) instead of in-game chat, and each turn is prefixed with the
+     * voice-call primer.
+     */
+    setVoiceCall: (active) => { try { orchestrator.setVoiceCall?.(active) } catch {} },
+    /**
+     * 260725 play/pause: the player pressed the in-app pause (or released it).
+     * Three coordinated moves: the orchestrator freezes/unfreezes (abort live
+     * work, capture the in-flight note, enqueue the resume tick), the FSM
+     * queue holds every event except live voice-call lines
+     * (orchestrator.allowWhilePaused) so no game LLM calls run while paused,
+     * and the adapter freezes the BODY (optional setWorldPaused member) so the
+     * game-side autonomous loops stop too — without it the bot keeps
+     * following, dodging and retaliating with the brain switched off.
+     */
+    setGamePaused: (paused) => {
+      try { orchestrator.setGamePaused?.(paused) } catch {}
+      try { adapter.setWorldPaused?.(paused) } catch {}
+      try {
+        queue.setHold(paused === true
+          ? (event, data) => orchestrator.allowWhilePaused?.(event, data) === true
+          : null)
+      } catch {}
+    },
+    /**
+     * 260725 runtime game mode (reactive/proactive), never persisted. Every
+     * summon starts proactive; the in-app MC mode buttons flip it live.
+     */
+    setGameMode: (mode) => { try { orchestrator.setGameMode?.(mode) } catch {} },
+    /**
+     * WR-05 follow-up: live-swap the AI backend (cloud-proxy ↔ BYOK) on the
+     * running orchestrator without re-summoning. No-op when the orchestrator
+     * or provider doesn't implement it.
+     */
+    setBackend: (backend) => { try { orchestrator.setBackend?.(backend) } catch {} },
+    /**
+     * Phase 15 (D-10/VIS-03): the active provider's vision capability boolean.
+     * src/bot/index.js reads this after summon-ready (and after a backend
+     * switch) to push `vision-capability` up the port → main → renderer.
+     * Fail-closed: false if the orchestrator/provider can't report it.
+     */
+    visionCapable: () => { try { return orchestrator.visionCapable?.() === true } catch { return false } },
+    /** 261010: settles when visionCapable() is final (Ollama's /api/show probe). */
+    visionReady: () => { try { return Promise.resolve(orchestrator.visionReady?.()).catch(() => {}) } catch { return Promise.resolve() } },
+  }
+}

@@ -1,0 +1,187 @@
+// src/bot/adapter/minecraft/fsmWires.death.test.js
+//
+// 260703 (death→brain): the bot used to only log + respawn on death — no event
+// ever reached the brain, so the next turn showed full hp / empty inventory with
+// no explanation and the model confabulated ("dropped the sword, not my fault").
+// These tests lock the new wire: connect.js emits `sei:death` (position snapped
+// BEFORE respawn); fsmWires translates it to handlers.onDeath; the adapter's
+// eventAddendum frames it for the prompt.
+
+import { describe, it, expect, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { wireBotEvents } from './fsmWires.js'
+import { eventAddendum } from './prompts.js'
+
+describe('sei:death wiring (fsmWires → handlers.onDeath)', () => {
+  it('translates a bot sei:death emit into handlers.onDeath with the pos payload', () => {
+    const bot = new EventEmitter()
+    const onDeath = vi.fn()
+    const dispose = wireBotEvents(bot, { onDeath })
+    bot.emit('sei:death', { pos: { x: -46, y: 71, z: -35 } })
+    expect(onDeath).toHaveBeenCalledTimes(1)
+    expect(onDeath).toHaveBeenCalledWith({ pos: { x: -46, y: 71, z: -35 } })
+    dispose()
+  })
+
+  // 261019 (pass 19): the payload now carries what she lost and when.
+  it('forwards lost / keptAll / deathText / diedAt alongside pos', () => {
+    const bot = new EventEmitter()
+    const onDeath = vi.fn()
+    const dispose = wireBotEvents(bot, { onDeath })
+    const payload = { pos: { x: 1, y: 2, z: 3 }, diedAt: 123, lost: [{ item: 'bread', n: 5 }], keptAll: false, deathText: 'Sui was slain by Zombie' }
+    bot.emit('sei:death', payload)
+    expect(onDeath).toHaveBeenCalledWith(payload)
+    dispose()
+  })
+
+  it('translates sei:dying into handlers.onDying, and dispose removes it', () => {
+    const bot = new EventEmitter()
+    const onDying = vi.fn()
+    const dispose = wireBotEvents(bot, { onDying })
+    bot.emit('sei:dying', { pos: null })
+    expect(onDying).toHaveBeenCalledTimes(1)
+    dispose()
+    bot.emit('sei:dying', { pos: null })
+    expect(onDying).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes a null pos through (death position was unreadable)', () => {
+    const bot = new EventEmitter()
+    const onDeath = vi.fn()
+    const dispose = wireBotEvents(bot, { onDeath })
+    bot.emit('sei:death', { pos: null })
+    expect(onDeath).toHaveBeenCalledWith({ pos: null })
+    dispose()
+  })
+
+  it('dispose() removes the sei:death listener', () => {
+    const bot = new EventEmitter()
+    const onDeath = vi.fn()
+    const dispose = wireBotEvents(bot, { onDeath })
+    dispose()
+    bot.emit('sei:death', { pos: { x: 1, y: 2, z: 3 } })
+    expect(onDeath).not.toHaveBeenCalled()
+  })
+
+  it('a throwing handler does not crash the emitter (listener errors swallowed)', () => {
+    const bot = new EventEmitter()
+    const dispose = wireBotEvents(bot, { onDeath: () => { throw new Error('boom') } })
+    expect(() => bot.emit('sei:death', { pos: null })).not.toThrow()
+    dispose()
+  })
+})
+
+describe('sei:death prompt framing (eventAddendum)', () => {
+  it('includes the death framing + coords when the death position is known', () => {
+    const t = eventAddendum('sei:death', { pos: { x: -46, y: 71, z: -35 } })
+    expect(t).toContain('You DIED')
+    expect(t).toContain('-46,71,-35')
+    expect(t).toContain('despawn')
+    expect(t).toMatch(/go back for your things/i)
+  })
+
+  it('omits coords when the death position is missing', () => {
+    const t = eventAddendum('sei:death', { pos: null })
+    expect(t).toContain('You DIED')
+    // No "~<coords>" parenthetical when pos is unknown.
+    expect(t).not.toMatch(/~-?\d/)
+  })
+
+  it('delegates non-death events to the base addendum (idle still works)', () => {
+    const t = eventAddendum('sei:idle', { quietMs: 5000 })
+    expect(t).toContain('IDLE TICK')
+  })
+
+  // 260708: sei:death now carries the last real hit (src/bot/brain/index.js
+  // attaches `lastAttack` when one landed within 30s) so the model knows WHAT
+  // killed it — live failure: Sui died mid-PvP-spar with Marv and said "i have
+  // literally no idea what just happened".
+  it('names the killer on a PvP death', () => {
+    const t = eventAddendum('sei:death', {
+      pos: { x: -22, y: 66, z: -45 },
+      lastAttack: { label: 'Marv', kind: 'player', pvp: true, secondsBefore: 2 },
+    })
+    expect(t).toContain('Marv killed you in your PvP spar')
+    expect(t).toContain('2s before you died')
+    expect(t).toContain('You DIED')
+    expect(t).toContain('-22,66,-45')
+  })
+
+  it('names the last attacker on a mob death', () => {
+    const t = eventAddendum('sei:death', {
+      pos: null,
+      lastAttack: { label: 'zombie', kind: 'mob', pvp: false, secondsBefore: 5 },
+    })
+    expect(t).toContain('The last thing that hit you was zombie')
+    expect(t).toContain('almost certainly what killed you')
+  })
+
+  it('renders no cause when no recent hit is attached (fall/burn/unknown)', () => {
+    const t = eventAddendum('sei:death', { pos: null })
+    expect(t).not.toContain('killed you')
+    expect(t).toContain('You DIED')
+  })
+})
+
+// 261019 (quality pass 19): she tried to eat bread lying on the ground after a
+// death and fought bare-handed without registering the sword was gone. The
+// framing now lists what dropped and uses the game's own death message.
+describe('sei:death framing with the lost items (pass 19)', () => {
+  it('lists the lost items with counts and says she no longer has them', () => {
+    const t = eventAddendum('sei:death', {
+      pos: { x: 10, y: 64, z: -3 },
+      lost: [{ item: 'bread', n: 5 }, { item: 'stone_sword', n: 1 }],
+    })
+    expect(t).toContain('bread x5, stone_sword.')
+    expect(t).toMatch(/do not have any of it now/)
+    expect(t).toContain('10,64,-3')
+    expect(t).toContain('item(...)')
+    expect(t).not.toContain('\u2014')
+  })
+
+  it('caps a long list', () => {
+    const lost = Array.from({ length: 15 }, (_, i) => ({ item: `thing_${i}`, n: 1 }))
+    const t = eventAddendum('sei:death', { pos: null, lost })
+    expect(t).toContain('thing_11')
+    expect(t).not.toContain('thing_12')
+    expect(t).toContain('and 3 more kinds of item')
+  })
+
+  it('keepInventory: says she still has everything and omits the drop spot', () => {
+    const t = eventAddendum('sei:death', { pos: { x: 1, y: 2, z: 3 }, lost: [], keptAll: true })
+    expect(t).toMatch(/still have everything/)
+    expect(t).not.toContain('1,2,3')
+    expect(t).not.toMatch(/dropped/)
+  })
+
+  it('carried nothing: nothing dropped', () => {
+    const t = eventAddendum('sei:death', { pos: { x: 1, y: 2, z: 3 }, lost: [] })
+    expect(t).toMatch(/nothing dropped/)
+    expect(t).not.toContain('1,2,3')
+  })
+
+  it("the game's death message wins over the last-hit guess", () => {
+    const t = eventAddendum('sei:death', {
+      pos: null,
+      deathText: 'Sui drowned while trying to escape Drowned',
+      lastAttack: { label: 'drowned', kind: 'mob', pvp: false, secondsBefore: 4 },
+    })
+    expect(t).toContain('The game reported: "Sui drowned while trying to escape Drowned".')
+    expect(t).not.toContain('The last thing that hit you')
+  })
+
+  it('a death message with $ patterns (a name-tagged mob) is quoted as-is', () => {
+    const text = "Sui was slain by $&$' Bob $`"
+    for (const data of [
+      { pos: { x: 1, y: 2, z: 3 }, deathText: text, lost: [{ item: 'bread', n: 1 }] },
+      { pos: null, deathText: text, lost: [{ item: 'bread', n: 1 }] },
+      { pos: null, deathText: text, lost: [] },
+      { pos: null, deathText: text, keptAll: true, lost: [] },
+    ]) {
+      const t = eventAddendum('sei:death', data)
+      expect(t).toContain(`The game reported: "${text}".`)
+      expect(t).not.toContain('{cause}')
+      expect(t).not.toContain('{lost}')
+    }
+  })
+})

@@ -1,0 +1,67 @@
+/* ContinueWithChatGPTButton — OpenAI's approved sign-in button format.
+ *
+ * Every value here is OpenAI's published button spec (developers.openai.com
+ * /siwc/website "Continue with ChatGPT" formats), NOT a design-system token;
+ * see ContinueWithChatGPTButton.tsx for why it is exempt. Only black and
+ * white fills are allowed. Default = white format (Sei's dark theme); the
+ * light theme takes the black format. */
+
+.button {
+  font-family: 'Inter', 'SIWC Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+
+  box-sizing: border-box;
+  height: 45px;
+  width: 242px;
+  max-width: 100%;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  background-color: #fff;
+  color: #000;
+}
+
+.button[data-format='black'],
+:root[data-scheme='light'] .button:not([data-format='white']) {
+  background-color: #000;
+  color: #fff;
+}
+
+.button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.button[data-format='black']:focus-visible,
+:root[data-scheme='light'] .button:not([data-format='white']):focus-visible {
+  outline-color: #000;
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.logo {
+  flex: none;
+  display: block;
+}
+
+/* Beside a full-width Google button on the sign-in surfaces (the SIWC
+ * quickstart asks for comparable prominence with the other options). The
+ * Google Identity button caps itself at 400px, so this matches it. */
+.fullWidth {
+  width: 100%;
+  max-width: 400px;
+}
