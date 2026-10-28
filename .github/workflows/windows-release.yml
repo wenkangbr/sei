@@ -45,6 +45,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $feed = if ($version.Contains('-')) { 'beta.yml' } else { 'latest.yml' }
+          if ($version.Contains('-') -and !(Test-Path 'release/beta.yml') -and (Test-Path 'release/latest.yml')) {
+            Copy-Item 'release/latest.yml' 'release/beta.yml'
+          }
           if (!(Test-Path "release/$feed")) { throw "Missing Windows update metadata: $feed" }
           if (!(Get-ChildItem 'release/*.exe')) { throw 'Missing Windows installer' }
           Remove-Item 'release/builder-debug.yml' -ErrorAction SilentlyContinue
