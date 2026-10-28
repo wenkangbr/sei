@@ -107,6 +107,11 @@ describe('findDstInstall', () => {
 });
 
 describe('modsettings.lua', () => {
+  it('can enable the optional client HUD without duplicating entries', () => {
+    const result = rewriteModSettings(null, true);
+    expect(result).toContain('ForceEnableMod("sei_hud")');
+    expect(rewriteModSettings(result, true)).toBe(result);
+  });
   const shipped = '-- Use the "ForceEnableMod" function when developing a mod.\n--ForceEnableMod("kioskmode_dst")\n\n-- Use "EnableModDebugPrint()" to show extra information during startup.\n--EnableModDebugPrint()\n';
   it('adds the two live lines once, preserves everything else, and is idempotent', () => {
     const once = rewriteModSettings(shipped);
@@ -125,6 +130,20 @@ describe('modsettings.lua', () => {
 });
 
 describe('install + detect', () => {
+  it('copies the client HUD when the game pack contains one', async () => {
+    const steam = 'C:\\Steam';
+    const install = path.join(steam, 'steamapps', 'common', "Don't Starve Together");
+    const mods = path.join(install, 'mods');
+    const src = path.join('C:\\pack', 'assets', 'dst-mod', 'sei');
+    const hud = path.join('C:\\pack', 'assets', 'dst-mod', 'sei_hud');
+    const deps = fakeFs({
+      [path.join(src, 'modinfo.lua')]: 'version = "0.3.1"',
+      [path.join(hud, 'modinfo.lua')]: 'version = "0.1.0"',
+    }, [install]);
+    deps.registrySteamPath = async () => steam;
+    await installMod({ packRoot: 'C:\\pack' }, deps);
+    expect(deps.copies).toContainEqual([hud, path.join(mods, 'sei_hud')]);
+  });
   const root = '/Users/me/Library/Application Support/Steam';
   const vdfPath = path.join(root, 'steamapps', 'libraryfolders.vdf');
   const install = path.join(root, 'steamapps', 'common', "Don't Starve Together");

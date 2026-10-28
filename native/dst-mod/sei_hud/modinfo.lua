@@ -1,0 +1,10 @@
+name = "Sei companion HUD"
+description = "Shows your Sei companion's status and quick commands on the host's screen."
+author = "Sei"
+version = "0.1.0"
+api_version = 10
+dst_compatible = true
+dont_starve_compatible = false
+client_only_mod = true
+all_clients_require_mod = false
+priority = -1

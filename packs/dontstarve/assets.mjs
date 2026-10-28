@@ -6,4 +6,5 @@
 // there), so the two paths below are the contract between them.
 export const ASSET_DIRS = [
   { from: 'native/dst-mod/sei', to: 'assets/dst-mod/sei' },
+  { from: 'native/dst-mod/sei_hud', to: 'assets/dst-mod/sei_hud' },
 ];

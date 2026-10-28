@@ -61,6 +61,13 @@ export const DstHeartbeatSchema = z.object({
   build: z.string().max(32).optional(),
   /** GUID of the live companion body, when one is spawned. */
   bot: z.number().optional(),
+  companion: z.object({
+    name: z.string().max(64),
+    health: z.number().finite(), healthMax: z.number().finite(),
+    hunger: z.number().finite(), hungerMax: z.number().finite(),
+    sanity: z.number().finite(), sanityMax: z.number().finite(),
+    activity: z.string().max(64),
+  }).nullable().optional(),
 });
 export type DstHeartbeat = z.infer<typeof DstHeartbeatSchema>;
 

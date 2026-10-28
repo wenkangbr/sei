@@ -251,7 +251,7 @@ const MARKER = '-- Added by Sei (the companion helper). Safe to leave in place.'
  * hooks commented out as documentation). Idempotent: running it on its own
  * output returns the same text.
  */
-export function rewriteModSettings(existing: string | null): string {
+export function rewriteModSettings(existing: string | null, enableHud = false): string {
   const text = existing ?? '';
   const lines = text.split(/\r?\n/);
   const isLive = (l: string, needle: string): boolean => {
@@ -260,7 +260,9 @@ export function rewriteModSettings(existing: string | null): string {
   };
   const hasForce = lines.some((l) => isLive(l, FORCE_LINE));
   const hasWarn = lines.some((l) => isLive(l, WARN_LINE));
-  if (hasForce && hasWarn) return text;
+  const hudLine = 'ForceEnableMod("sei_hud")';
+  const hasHud = lines.some((l) => isLive(l, hudLine));
+  if (hasForce && hasWarn && (!enableHud || hasHud)) return text;
   const out = [...lines];
   while (out.length && out[out.length - 1].trim() === '') out.pop();
   if (!out.some((l) => l.trim() === MARKER)) {
@@ -268,6 +270,7 @@ export function rewriteModSettings(existing: string | null): string {
     out.push(MARKER);
   }
   if (!hasForce) out.push(FORCE_LINE);
+  if (enableHud && !hasHud) out.push(hudLine);
   if (!hasWarn) out.push(WARN_LINE);
   return out.join('\n') + '\n';
 }
@@ -392,6 +395,10 @@ async function writeHelper(
     }
     onProgress?.('copying');
     await deps.copyDir(src, dest);
+    const hudSrc = path.join(path.dirname(src), 'sei_hud');
+    if (await deps.exists(path.join(hudSrc, 'modinfo.lua'))) {
+      await deps.copyDir(hudSrc, path.join(modsDir, 'sei_hud'));
+    }
     onProgress?.('enabling');
     await enableMod(modsDir, deps);
     return null;
@@ -579,6 +586,7 @@ export function installError(err: unknown, platform: NodeJS.Platform): DstInstal
 export async function enableMod(modsDir: string, deps: InstallDeps = defaultDeps()): Promise<void> {
   const p = path.join(modsDir, 'modsettings.lua');
   const existing = await deps.readText(p);
-  const next = rewriteModSettings(existing);
+  const hudInstalled = await deps.exists(path.join(modsDir, 'sei_hud', 'modinfo.lua'));
+  const next = rewriteModSettings(existing, hudInstalled);
   if (next !== existing) await deps.writeText(p, next);
 }

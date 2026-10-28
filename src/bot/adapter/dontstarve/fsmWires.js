@@ -57,7 +57,9 @@ export function wireLinkEvents(link, handlers, opts) {
     const username = String(p.name || p.userid || 'player')
     const companions = (opts?.companions?.() ?? []).map((c) => String(c).toLowerCase())
     const fromCompanion = companions.includes(username.toLowerCase())
-    const isAddressed = addressed.test(text)
+    // JavaScript's word boundaries do not recognize Chinese characters.
+    const isAddressed = addressed.test(text) ||
+      (/[^\x00-\x7f]/.test(botName) && text.toLocaleLowerCase().includes(botName.toLocaleLowerCase()))
     // A sibling companion's line is context, not a wake, unless it names us.
     const suppressInterrupt = fromCompanion && !isAddressed
     handlers.onChat?.({

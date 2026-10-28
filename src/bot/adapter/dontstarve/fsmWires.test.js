@@ -10,6 +10,13 @@ function setup({ hasCaps = false, darkNeedsBrain } = {}) {
 }
 
 describe('DST fsm wires: survival routing', () => {
+  it('recognizes a Chinese companion name in normal chat', () => {
+    const link = new EventEmitter()
+    const handlers = { onChat: vi.fn() }
+    wireLinkEvents(link, handlers, { botName: '小伙伴', companions: () => [] })
+    link.emit('chat', { name: 'player', text: '小伙伴，快跟上' })
+    expect(handlers.onChat).toHaveBeenCalledWith(expect.objectContaining({ addressed: true }))
+  })
   it('an older helper wakes the brain on every survival event and on enterdark', () => {
     const { link, handlers } = setup()
     link.emit('survival', { what: 'ate', item: 'berries' })

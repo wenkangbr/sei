@@ -60,6 +60,19 @@ describe('createDstWatcher (no socket)', () => {
 });
 
 describe('createDstWatcher (socket)', () => {
+  it('serves current companion status to the local HUD and clears stale data', async () => {
+    let now = 1000;
+    const port = await freePort();
+    const w = createDstWatcher({ port, now: () => now, staleMs: 1000, log: quiet });
+    stops.push(() => w.stop());
+    w.start({ onUpdate: vi.fn() });
+    await new Promise((r) => setTimeout(r, 50));
+    w.handleHello({ session: 'S', companion: { name: '小伙伴', health: 60, healthMax: 100, hunger: 50, hungerMax: 100, sanity: 90, sanityMax: 100, activity: 'chop' } });
+    const response = await fetch(`http://127.0.0.1:${port}/hud`);
+    expect(await response.json()).toMatchObject({ app: 'sei', companion: { name: '小伙伴', health: 60, activity: 'chop' } });
+    now = 3000;
+    expect(await (await fetch(`http://127.0.0.1:${port}/hud`)).json()).toEqual({ app: 'sei', companion: null });
+  });
   it('serves /hello over HTTP for the fake mod, pushes open on the first beat, and reports a taken port as unavailable', async () => {
     const port = await freePort();
     const onUpdate = vi.fn();

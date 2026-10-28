@@ -76,6 +76,8 @@ export function createDstWatcher(opts: DstWatcherOptions = {}): DstWatcher {
   let timer: NodeJS.Timeout | null = null;
   let last: DstHeartbeat | null = null;
   let lastAt = 0;
+  let companion: DstHeartbeat['companion'] = null;
+  let companionAt = 0;
   let bindError: string | null = null;
   let lastEmitted: string | null = null;
   const offers = new Map<string, DstSummonOffer>();
@@ -129,6 +131,10 @@ export function createDstWatcher(opts: DstWatcherOptions = {}): DstWatcher {
     if (parsed.success) {
       last = parsed.data;
       lastAt = now();
+      if (parsed.data.companion) {
+        companion = parsed.data.companion;
+        companionAt = now();
+      }
       emitIfChanged();
     }
     const offer = takeOffer();
@@ -149,6 +155,10 @@ export function createDstWatcher(opts: DstWatcherOptions = {}): DstWatcher {
       url = new URL(req.url ?? '/', 'http://127.0.0.1');
     } catch {
       return send(400, { ok: false });
+    }
+    if (url.pathname === '/hud' && req.method === 'GET') {
+      req.resume();
+      return send(200, { app: DST_HELLO_APP, companion: companion && now() - companionAt <= staleMs ? companion : null });
     }
     if (url.pathname !== '/hello') return send(404, { ok: false });
     const q = url.searchParams.get('q') ?? '';

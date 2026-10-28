@@ -164,6 +164,7 @@ export interface GamePackSource {
 /** Mirror first (bounded connect), then origin. */
 export function gamePackSources(version: string, asset: string): GamePackSource[] {
   return [
+    { url: `https://github.com/wenkangbr/sei/releases/download/v${version}/${asset}`, connectTimeoutMs: GAME_PACK_MIRROR_CONNECT_TIMEOUT_MS },
     {
       url: `${GAME_PACK_MIRROR_BASE}/${gamePackMirrorDir(version)}/${asset}`,
       connectTimeoutMs: GAME_PACK_MIRROR_CONNECT_TIMEOUT_MS,

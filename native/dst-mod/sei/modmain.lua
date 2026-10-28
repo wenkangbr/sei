@@ -82,6 +82,19 @@ local function helloBody()
         end
     end
     local Companion = require("sei/companion")
+    local body = Companion.IsLive() and Companion.inst or nil
+    local status = nil
+    if body ~= nil and body.components.health ~= nil and body.components.hunger ~= nil and body.components.sanity ~= nil then
+        local h, hu, sa = body.components.health, body.components.hunger, body.components.sanity
+        local cmd = body.sei and body.sei.cmd
+        status = {
+            name = tostring(body.name or "Sei"),
+            health = h.currenthealth, healthMax = h.maxhealth,
+            hunger = hu.current, hungerMax = hu.max,
+            sanity = sa.current, sanityMax = sa.max,
+            activity = cmd and tostring(cmd.kind or "idle") or "idle",
+        }
+    end
     return {
         session = TheNet.GetSessionIdentifier ~= nil and TheNet:GetSessionIdentifier() or "",
         world = TheNet.GetServerName ~= nil and TheNet:GetServerName() or "",
@@ -94,6 +107,7 @@ local function helloBody()
         mod = MOD_VERSION,
         build = tostring(GLOBAL.APP_VERSION or ""),
         bot = Companion.IsLive() and Companion.inst.GUID or nil,
+        companion = status,
     }
 end
 
