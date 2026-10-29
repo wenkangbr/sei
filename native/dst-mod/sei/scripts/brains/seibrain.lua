@@ -37,6 +37,7 @@ require("behaviours/standstill")
 local Commands = require("sei/commands")
 local Events = require("sei/events")
 local Reflexes = require("sei/reflexes")
+local Pickup = require("sei/pickup")
 local Survivors = require("sei/survivors")
 local Util = require("sei/util")
 
@@ -367,10 +368,12 @@ function SeiBrain:OnStart()
         -- 6. the command slot
         WhileNode(function() return actionSlot(inst) end, "Command",
             DoAction(inst, function() return Commands.NextAction(inst) end, "SeiCommand", true)),
-        -- 7. follow
+        -- 7. Pick up ordinary nearby resources only when idle, then follow.
+        DoAction(inst, function() return Pickup.Next(inst) end, "PickupNearby", true),
+        -- 8. follow
         WhileNode(function() return followTarget(inst) ~= nil end, "Follow",
             Follow(inst, function() return followTarget(inst) end, 2, inst.sei.followDist or 4, 14, true)),
-        -- 8. stand still
+        -- 9. stand still
         StandStill(inst),
     }, 0.25)
     self.bt = BT(inst, root)

@@ -48,7 +48,7 @@ local function addHud(controls)
     if controls.seiHud ~= nil or controls.topleft_root == nil then return end
     local root = controls.topleft_root:AddChild(require("widgets/widget")("SeiHud"))
     controls.seiHud = root
-    root:SetPosition(205, -150)
+    root:SetPosition(325, -150)
     root:Hide()
     local details
     local card = button(root, "Sei", 0, 0, function()
