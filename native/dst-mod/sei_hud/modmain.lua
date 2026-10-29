@@ -5,7 +5,14 @@ local ipairs, pcall, type = G.ipairs, G.pcall, G.type
 local tostring, tonumber, math, string = G.tostring, G.tonumber, G.math, G.string
 local Text = require("widgets/text")
 local ImageButton = require("widgets/imagebutton")
-local ChatInputScreen = require("screens/chatinputscreen")
+local TextEdit = require("widgets/textedit")
+local Image = require("widgets/image")
+
+-- The server helper registers the real handler. A remote client needs the
+-- matching local RPC id too; the handler itself only executes on the server.
+if G.TheNet ~= nil and not G.TheNet:GetIsServer() then
+    AddModRPCHandler("sei_panel", "action", function() end)
+end
 
 local PORTS = { 27424, 27425, 27426, 27427, 27428 }
 local commands = {
@@ -41,22 +48,52 @@ local function addHud(controls)
     if controls.seiHud ~= nil or controls.topleft_root == nil then return end
     local root = controls.topleft_root:AddChild(require("widgets/widget")("SeiHud"))
     controls.seiHud = root
-    root:SetPosition(150, -135)
+    root:SetPosition(205, -150)
     root:Hide()
+    local details
     local card = button(root, "Sei", 0, 0, function()
-        if G.TheFrontEnd ~= nil then G.TheFrontEnd:PushScreen(ChatInputScreen(false)) end
+        if details.shown then details:Hide() else details:Show() end
     end)
     card:ForceImageSize(390, 36)
     card:SetTextSize(22)
-    local info = root:AddChild(Text(G.TALKINGFONT, 22, ""))
-    info:SetPosition(0, -35)
+    details = root:AddChild(require("widgets/widget")("SeiDetails"))
+    details:Show()
+    local info = details:AddChild(Text(G.TALKINGFONT, 20, ""))
+    info:SetPosition(0, -48)
     info:SetClickable(false)
+    local notice = details:AddChild(Text(G.TALKINGFONT, 18, ""))
+    notice:SetPosition(0, -120)
+    notice:SetClickable(false)
+    local function send(action, message)
+        local ok = pcall(function()
+            SendModRPCToServer(GetModRPC("sei_panel", "action"), action, message or "")
+        end)
+        notice:SetString(ok and (action == "call" and "已请求呼唤" or "已发送给 AI") or "发送失败，请检查模组版本")
+    end
+    local background = details:AddChild(Image("images/global.xml", "square.tex"))
+    background:SetPosition(-35, -155)
+    background:SetSize(300, 32)
+    background:SetTint(1, 1, 1, .9)
+    background:SetClickable(false)
+    local edit = details:AddChild(TextEdit(G.TALKINGFONT, 20, ""))
+    edit:SetPosition(-35, -155)
+    edit:SetRegionSize(300, 32)
+    edit:SetTextLengthLimit(120)
+    edit:SetTextPrompt("点击输入，回车发送")
+    edit:SetString("")
+    local function sendText()
+        local message = edit:GetString()
+        if type(message) ~= "string" or not message:match("%S") then return end
+        send("chat", message)
+        edit:SetString("")
+    end
+    edit.OnTextEntered = sendText
+    button(details, "发送", 160, -155, sendText)
+    button(details, "呼唤", 160, -195, function() send("call") end)
     local quick = {}
     for i, spec in ipairs(commands) do
         local command = spec[2]
-        quick[i] = button(root, spec[1], (i - 3) * 82, -75, function()
-            if G.TheNet ~= nil then G.TheNet:Say(command, false) end
-        end)
+        quick[i] = button(details, spec[1], (i - 3) * 82, -235, function() send("chat", command) end)
     end
     local activePort = nil
     local function poll(port)
@@ -72,8 +109,9 @@ local function addHud(controls)
             if type(s) ~= "table" then root:Hide(); return end
             root:Show()
             card:SetText(tostring(s.name or "Sei") .. "  ·  " .. (activity[s.activity] or tostring(s.activity or "待命")))
-            info:SetString(string.format("生命 %d/%d    饥饿 %d/%d    理智 %d/%d",
-                rounded(s.health), rounded(s.healthMax), rounded(s.hunger), rounded(s.hungerMax), rounded(s.sanity), rounded(s.sanityMax)))
+            info:SetString(string.format("生命 %d/%d    饥饿 %d/%d    理智 %d/%d\n体温 %s    背包 %d 格    %s",
+                rounded(s.health), rounded(s.healthMax), rounded(s.hunger), rounded(s.hungerMax), rounded(s.sanity), rounded(s.sanityMax),
+                s.temperature ~= nil and (tostring(rounded(s.temperature)) .. "°") or "--", rounded(s.inventoryCount), s.dead and "已死亡" or "存活"))
         end, "GET")
     end
     root.inst:DoPeriodicTask(2, function()

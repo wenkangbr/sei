@@ -67,9 +67,9 @@ describe('createDstWatcher (socket)', () => {
     stops.push(() => w.stop());
     w.start({ onUpdate: vi.fn() });
     await new Promise((r) => setTimeout(r, 50));
-    w.handleHello({ session: 'S', companion: { name: '小伙伴', health: 60, healthMax: 100, hunger: 50, hungerMax: 100, sanity: 90, sanityMax: 100, activity: 'chop' } });
+    w.handleHello({ session: 'S', companion: { name: '小伙伴', health: 60, healthMax: 100, hunger: 50, hungerMax: 100, sanity: 90, sanityMax: 100, activity: 'chop', temperature: 23, inventoryCount: 4, dead: false } });
     const response = await fetch(`http://127.0.0.1:${port}/hud`);
-    expect(await response.json()).toMatchObject({ app: 'sei', companion: { name: '小伙伴', health: 60, activity: 'chop' } });
+    expect(await response.json()).toMatchObject({ app: 'sei', companion: { name: '小伙伴', health: 60, activity: 'chop', temperature: 23, inventoryCount: 4, dead: false } });
     now = 3000;
     expect(await (await fetch(`http://127.0.0.1:${port}/hud`)).json()).toEqual({ app: 'sei', companion: null });
   });

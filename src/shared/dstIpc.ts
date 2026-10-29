@@ -67,6 +67,10 @@ export const DstHeartbeatSchema = z.object({
     hunger: z.number().finite(), hungerMax: z.number().finite(),
     sanity: z.number().finite(), sanityMax: z.number().finite(),
     activity: z.string().max(64),
+    prefab: z.string().max(64).optional(),
+    dead: z.boolean().optional(),
+    temperature: z.number().finite().optional(),
+    inventoryCount: z.number().int().nonnegative().optional(),
   }).nullable().optional(),
 });
 export type DstHeartbeat = z.infer<typeof DstHeartbeatSchema>;

@@ -30,6 +30,7 @@ local json = GLOBAL.json
 local pcall = GLOBAL.pcall
 local tostring = GLOBAL.tostring
 local type = GLOBAL.type
+local pairs, ipairs = GLOBAL.pairs, GLOBAL.ipairs
 
 -- MIRROR: DST_DISCOVERY_PORTS in src/shared/dstIpc.ts.
 local PORTS = { 27424, 27425, 27426, 27427, 27428 }
@@ -52,6 +53,24 @@ if not (TheNet ~= nil and TheNet:GetIsServer()) then
     log("client instance, helper idle")
     return
 end
+
+-- Requests from the HUD travel over the game's player-authenticated RPC.
+-- They never enter the public chat log, and the server chooses the caller.
+AddModRPCHandler("sei_panel", "action", function(player, action, message)
+    if player == nil or not player:IsValid() or player:HasTag("sei_companion") then return end
+    local Companion = require("sei/companion")
+    if not Companion.IsLive() then return end
+    local body = Companion.inst
+    if action == "chat" and type(message) == "string" and #message > 0 and #message <= 512 then
+        require("sei/events").OnChat(player.GUID, player.userid, player.name, player.prefab, message, true)
+    elseif action == "call" and body.components.health ~= nil and not body.components.health:IsDead() then
+        local x, y, z = player.Transform:GetWorldPosition()
+        local map = GLOBAL.TheWorld and GLOBAL.TheWorld.Map
+        if map == nil or not map:IsPassableAtPoint(x, 0, z) then return end
+        if body.components.locomotor ~= nil then body.components.locomotor:Stop() end
+        body.Transform:SetPosition(x, y, z)
+    end
+end)
 
 -- ── chat capture ────────────────────────────────────────────────────────────
 -- Installed once, at load: Networking_Say is a plain global, so the wrapper
@@ -93,6 +112,14 @@ local function helloBody()
             hunger = hu.current, hungerMax = hu.max,
             sanity = sa.current, sanityMax = sa.max,
             activity = cmd and tostring(cmd.kind or "idle") or "idle",
+            prefab = tostring(body.prefab or ""),
+            dead = h:IsDead(),
+            temperature = body.components.temperature ~= nil and body.components.temperature:GetCurrent() or nil,
+            inventoryCount = body.components.inventory ~= nil and (function()
+                local n = 0
+                for _, _ in pairs(body.components.inventory.itemslots) do n = n + 1 end
+                return n
+            end)() or 0,
         }
     end
     return {
